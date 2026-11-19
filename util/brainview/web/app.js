@@ -140,23 +140,36 @@ async function refreshAIs() {
 }
 
 async function selectAI(port) {
-  if (S.port === port && S.source) return;
+  // S.port is set before any await, so overlapping calls cannot open a second stream
+  if (S.port === port) return;
   S.port = port;
   if (S.source) S.source.close();
-  Object.assign(S, { meta: null, state: null, history: [], decisions: [], selected: null, terrain: null, view: null });
-  S.stateCache.clear();
-  renderFeed();
-  closeDetail();
+  S.source = null;
+  Object.assign(S, { meta: null, terrain: null, view: null });
+  resetMatch();
   await loadMeta();
+  if (S.port !== port) return; // another AI was picked while meta loaded
   const src = new EventSource(`/events?port=${port}`);
   S.source = src;
   src.addEventListener("state", (e) => onState(JSON.parse(e.data)));
   src.addEventListener("decision", (e) => onDecision(JSON.parse(e.data)));
-  src.addEventListener("meta", () => loadMeta());
+  src.addEventListener("meta", () => { resetMatch(); loadMeta(); });
   src.addEventListener("status", (e) => setConnected(JSON.parse(e.data).connected));
-  src.onopen = () => setConnected(true);
+  src.onopen = () => {
+    // Every (re)connect replays the recent decisions, so start from a clean list
+    S.decisions = [];
+    renderFeed();
+    setConnected(true);
+  };
   src.onerror = () => setConnected(false);
   refreshAIs();
+}
+
+// Clears everything tied to one game, for a new AI tab or a new match on the same port
+function resetMatch() {
+  Object.assign(S, { state: null, history: [], decisions: [], selected: null, layerImg: null });
+  S.stateCache.clear();
+  closeDetail();
 }
 
 async function loadMeta() {
@@ -180,17 +193,22 @@ function setConnected(on) {
 }
 
 function onState(st) {
+  const last = S.history[S.history.length - 1];
+  if (last && st.frame < last.frame) resetMatch(); // frames went backwards: a new match
+  if (last && st.frame === last.frame) return; // replayed after a reconnect
   S.history.push({ frame: st.frame, eco: st.eco });
   if (S.history.length > MAX_HISTORY) S.history.shift();
   if (S.paused) return;
   S.state = st;
   S.stateCache.clear();
+  S.layerImg = null;
   S.tasks = new Map(st.tasks.map((t) => [t.id, t]));
   $("clock").textContent = clock(st.frame);
   renderEconomy();
   renderMilitary();
   draw();
 }
+
 
 // Decisions can arrive dozens of times a second; repaint at most once per frame
 // and move the followed detail at most every FOLLOW_MS so it stays readable.
@@ -327,7 +345,11 @@ function draw() {
 
   ctx.imageSmoothingEnabled = true;
   if (S.terrain) ctx.drawImage(S.terrain, x0, y0, sw, sh);
-  const li = S.layer !== "none" ? layerImage(S.layer) : null;
+  if (S.layer !== "none" && (!S.layerImg || S.layerImg.name !== S.layer)) {
+    S.layerImg = layerImage(S.layer);
+    if (S.layerImg) S.layerImg.name = S.layer;
+  }
+  const li = S.layer !== "none" ? S.layerImg : null;
   if (li) {
     const gw = li.grid.w * li.grid.cell * S.view.scale;
     const gh = li.grid.h * li.grid.cell * S.view.scale;
@@ -764,8 +786,10 @@ function renderOptions(d) {
   const table = $("detail-options");
   table.replaceChildren();
   const lower = LOWER_WINS.has(d.kind);
-  $("options-title").textContent = d.kind === "factory"
+  const rolled = d.kind === "factory" && d.path.some(([node]) => node === "weighted roll");
+  $("options-title").textContent = rolled
     ? "Options (weights for a random roll; higher is likelier)"
+    : d.kind === "factory" ? "Options (weights; no roll this time)"
     : lower ? "Options (lowest score wins)" : "Options";
   if (!d.options.length) {
     const tr = el("tr");
@@ -778,7 +802,7 @@ function renderOptions(d) {
   const maxScore = Math.max(...scored.map((o) => o.score), 1e-9);
   const minScore = Math.min(...scored.map((o) => o.score), Infinity);
   const head = el("tr");
-  for (const h of ["option", d.kind === "factory" ? "chance" : "score", "", "components"]) head.append(el("th", "", h));
+  for (const h of ["option", rolled ? "chance" : d.kind === "factory" ? "weight" : "score", "", "components"]) head.append(el("th", "", h));
   table.append(head);
 
   const order = d.options.map((o, i) => i).sort((a, b) => {
@@ -799,7 +823,7 @@ function renderOptions(d) {
     const barCell = el("td");
     barCell.style.width = "16%";
     if (o.score != null) {
-      num.textContent = d.kind === "factory" && total > 0 && !o.reject ? `${((o.score / total) * 100).toFixed(1)}%` : fmt(o.score, 3);
+      num.textContent = rolled && total > 0 && !o.reject ? `${((o.score / total) * 100).toFixed(1)}%` : fmt(o.score, 3);
       const bar = el("div", "bar");
       // Bar length shows preference: longest is the most attractive option
       const pref = lower ? (minScore > 0 ? minScore / o.score : 1) : o.score / maxScore;

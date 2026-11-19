@@ -38,6 +38,7 @@ class AILink:
     def __init__(self, port):
         self.port = port
         self.lock = threading.Lock()
+        self.send_lock = threading.Lock()  # keeps concurrent commands from interleaving
         self.sock = None
         self.hello = None
         self.meta = None  # raw JSON line
@@ -74,7 +75,8 @@ class AILink:
         if sock is None:
             return False
         try:
-            sock.sendall(data)
+            with self.send_lock:
+                sock.sendall(data)
             return True
         except OSError:
             return False
@@ -99,7 +101,10 @@ class AILink:
             sock.settimeout(None)
             with self.lock:
                 self.sock = sock
-            self._read(sock)
+            try:
+                self._read(sock)
+            except (OSError, ValueError):
+                pass  # dropped or garbled connection; reconnect below
             with self.lock:
                 self.sock = None
                 self.hello = None
@@ -141,7 +146,15 @@ class AILink:
 
 class Handler(http.server.BaseHTTPRequestHandler):
     links = {}
+    allowed_hosts = set()
     protocol_version = "HTTP/1.1"
+
+    def _host_ok(self):
+        # Rejects DNS-rebinding pages, which reach us under a foreign Host name
+        if self.headers.get("Host", "") in self.allowed_hosts:
+            return True
+        self._json(403, {"error": "unexpected Host header"})
+        return False
 
     def log_message(self, fmt, *args):
         pass
@@ -163,6 +176,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if not self._host_ok():
+            return None
         url = urllib.parse.urlparse(self.path)
         query = urllib.parse.parse_qs(url.query)
         if url.path == "/api/ais":
@@ -190,6 +205,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return self._static(url.path)
 
     def do_POST(self):
+        if not self._host_ok():
+            return None
         url = urllib.parse.urlparse(self.path)
         if url.path != "/api/send":
             return self._json(404, {"error": "not found"})
@@ -199,7 +216,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         link = self._link(urllib.parse.parse_qs(url.query))
         if link is None:
             return self._json(404, {"error": "unknown port"})
-        length = int(self.headers.get("Content-Length", "0"))
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = -1
         if length <= 0 or length > 64 * 1024:
             return self._json(400, {"error": "bad length"})
         try:
@@ -265,6 +285,7 @@ def main():
     args = ap.parse_args()
 
     Handler.links = {p: AILink(p) for p in parse_ports(args.ports)}
+    Handler.allowed_hosts = {f"127.0.0.1:{args.listen}", f"localhost:{args.listen}"}
     server = http.server.ThreadingHTTPServer(("127.0.0.1", args.listen), Handler)
     server.daemon_threads = True
     print(f"brainview: http://127.0.0.1:{args.listen}/  (AI ports {args.ports})", flush=True)
