@@ -55,3 +55,24 @@ The Control tab sends commands to the AI (see `cmd` in PROTOCOL.md):
   values turn amber with a restore button; "Reset everything" undoes all
   changes, the focus and unit control.
 - The command log shows each command and whether the AI accepted it.
+
+## LLM control (MCP)
+
+`brain_mcp.py` is an MCP server (stdio, standard library only) that lets an LLM
+read the AI's state and steer it with the same commands as the Control tab. It
+connects to the AI ports directly, so the bridge does not need to run.
+
+Register it with Claude Code, for example:
+
+```bash
+claude mcp add barb-brain -- python3 /path/to/util/brainview/brain_mcp.py --ports 7710-7717
+```
+
+Read tools: `list_ais`, `get_overview`, `get_map` (a layer as a sector grid),
+`get_units`, `get_enemies`, `get_decisions`, `get_tuning`. Control tools:
+`set_tuning`, `reset`, `limit_unit`, `build`, `recruit`, `order_units`,
+`set_focus`, `clear_focus`. Positions are world `x, z` or sector names such as
+`C7` (columns A-H from the west, rows from the north).
+
+The game keeps running while the model thinks, so it works best as a strategist
+that checks in every half minute or so, while BARb handles everything fast.

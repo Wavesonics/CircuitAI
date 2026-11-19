@@ -105,12 +105,33 @@ class Game:
             return None
         return {"x": round(p[0]), "z": round(p[1]), "sector": self.sector(p[0], p[1])}
 
+    def sector_center(self, name):
+        name = name.strip().upper()
+        if len(name) < 2 or not name[0].isalpha() or not name[1:].isdigit():
+            raise ToolError(f"'{name}' is not a sector name like C7")
+        size = self.sector_size()
+        col = ord(name[0]) - ord("A")
+        row = int(name[1:]) - 1
+        m = self.meta()["map"]
+        if not (0 <= col < SECTOR_COLS) or not (0 <= row * size < m["height"]):
+            raise ToolError(f"sector {name} is off the map")
+        return (col + 0.5) * size, min((row + 0.5) * size, m["height"] - 1)
+
+    def point(self, args, what="a position"):
+        """[x, z] from either x and z or a sector name in args."""
+        if args.get("sector"):
+            return self.sector_center(args["sector"])
+        if isinstance(args.get("x"), (int, float)) and isinstance(args.get("z"), (int, float)):
+            return float(args["x"]), float(args["z"])
+        raise ToolError(f"give {what} as x and z, or as a sector like C7")
+
 
 class Server:
     def __init__(self, ports):
         self.links = {p: AILink(p) for p in ports}
         self.games = {p: Game(link) for p, link in self.links.items()}
         self.out_lock = threading.Lock()
+        self.cmd_seq = 0
 
     # -- AI selection
 
@@ -402,6 +423,120 @@ class Server:
                 "ranges": "factory.* 0-10; quota.scouts 0-50; quota.attack/raidMin/raidAvg 0-10000; "
                           "role.<role>.maxPercent 0-1; role.<role>.factor 0-100"}
 
+    # -- control tools
+
+    MAX_ORDER_UNITS = 200
+
+    def command(self, g, op, **fields):
+        self.cmd_seq += 1
+        obj = {"t": "cmd", "op": op, "id": f"mcp-{self.cmd_seq}", **fields}
+        ack = g.link.request(obj, timeout=5.0)
+        if ack is None:
+            raise ToolError("the AI did not answer; it may have disconnected or the game is paused")
+        if not ack.get("ok"):
+            raise ToolError(f"the AI refused: {ack.get('error', 'no reason given')}")
+        return ack
+
+    def control_summary(self, g, ack):
+        c = ack.get("control") or {}
+        out = {"ok": True}
+        if ack.get("result"):
+            res = dict(ack["result"])
+            if "pos" in res:
+                res["pos"] = g.pos(res["pos"])
+            out["result"] = res
+        f = c.get("focus")
+        out["focus"] = ({"at": g.pos([f["x"], f["z"]]), "radius": round(f["radius"]), "force": f["force"],
+                         "lapsesAt": clock(f["until"])} if f else None)
+        out["changedTuning"] = {k: {"now": round(c["tuning"][k], 3), "was": round(v, 3)}
+                                for k, v in (c.get("changed") or {}).items()}
+        out["unitsUnderYourControl"] = len(c.get("controlled", []))
+        return out
+
+    def t_set_tuning(self, args):
+        g = self.game(args)
+        return self.control_summary(g, self.command(g, "set", key=args["key"], value=args["value"]))
+
+    def t_reset(self, args):
+        g = self.game(args)
+        fields = {"key": args["key"]} if args.get("key") else {}
+        return self.control_summary(g, self.command(g, "reset", **fields))
+
+    def t_limit_unit(self, args):
+        g = self.game(args)
+        return self.control_summary(g, self.command(g, "limit", **{"def": args["unit"], "limit": args.get("limit")}))
+
+    def t_build(self, args):
+        g = self.game(args)
+        x, z = g.point(args, "where to build")
+        fields = {"def": args["unit"], "x": round(x), "z": round(z)}
+        if args.get("type"):
+            fields["type"] = args["type"]
+        return self.control_summary(g, self.command(g, "build", **fields))
+
+    def t_recruit(self, args):
+        g = self.game(args)
+        fields = {"def": args["unit"], "count": int(args.get("count", 1))}
+        if args.get("factory") is not None:
+            fields["factory"] = int(args["factory"])
+        return self.control_summary(g, self.command(g, "recruit", **fields))
+
+    def select_units(self, g, args):
+        """Unit ids from explicit ids, or from role/type/area filters over the latest state."""
+        if args.get("units"):
+            return [int(u) for u in args["units"]]
+        role, name = args.get("role"), args.get("unit")
+        area = args.get("from_sector")
+        if not (role or name or area):
+            raise ToolError("say which units: units (ids), role, unit type and/or from_sector")
+        defs = g.defs()
+        st = g.state()
+        if area:
+            cx, cz = g.sector_center(area)
+            half = g.sector_size() / 2
+        ids = []
+        for uid, did, x, z, _hp, _tid in st["units"]:
+            d = defs.get(did, {})
+            if not d.get("mobile", True):
+                continue
+            if role and d.get("role") != role:
+                continue
+            if name and d.get("name") != name:
+                continue
+            if area and (abs(x - cx) > half or abs(z - cz) > half):
+                continue
+            ids.append(uid)
+        if not ids:
+            raise ToolError("no mobile units match that selection")
+        return ids[:self.MAX_ORDER_UNITS]
+
+    def t_order_units(self, args):
+        g = self.game(args)
+        action = args["action"]
+        ids = self.select_units(g, args)
+        fields = {"action": action, "units": ids}
+        if action in ("move", "fight"):
+            tx, tz = g.point({"x": args.get("x"), "z": args.get("z"), "sector": args.get("to_sector")}, "the destination")
+            fields.update(x=round(tx), z=round(tz))
+        if args.get("seconds") is not None:
+            fields["seconds"] = int(args["seconds"])
+        out = self.control_summary(g, self.command(g, "units", **fields))
+        out["selected"] = len(ids)
+        return out
+
+    def t_set_focus(self, args):
+        g = self.game(args)
+        x, z = g.point(args, "the focus")
+        fields = {"x": round(x), "z": round(z), "force": bool(args.get("force", False))}
+        for k in ("radius", "seconds"):
+            if args.get(k) is not None:
+                fields[k] = args[k]
+        return self.control_summary(g, self.command(g, "focus", **fields))
+
+    def t_clear_focus(self, args):
+        g = self.game(args)
+        return self.control_summary(g, self.command(g, "focus", clear=True))
+
     # -- MCP plumbing
 
     def dispatch(self, msg):
@@ -512,6 +647,54 @@ tool("get_decisions",
       "limit": {"type": "integer", "description": "1-20, default 5"}})(Server.t_get_decisions)
 tool("get_tuning", "Current values of every tunable the AI exposes, and which ones you changed.")(
     Server.t_get_tuning)
+
+WHERE = {"x": {"type": "number"}, "z": {"type": "number"},
+         "sector": {"type": "string", "description": "sector name like C7, instead of x and z"}}
+
+tool("set_tuning",
+     "Change one of the AI's tuning values (see get_tuning). It applies from the AI's next decision and lasts "
+     "until reset. Useful keys: factory.buildPowerRatio (0-10, builders per metal income: raise to expand "
+     "faster), factory.responseWeight (0-10, how hard production counters the enemy's army), quota.attack "
+     "(power a squad gathers before attacking: lower attacks sooner and smaller), quota.raidMin/raidAvg, "
+     "quota.scouts, role.<role>.maxPercent (0-1, cap on that role's share of the army; 0 stops building it), "
+     "role.<role>.factor (0-100, how readily that role is built to counter the enemy).",
+     {"key": {"type": "string"}, "value": {"type": "number"}}, ("key", "value"))(Server.t_set_tuning)
+tool("reset", "Undo your changes: one tuning key, or with no key everything (tuning, unit limits, the attack "
+     "focus, and units under your control).", {"key": {"type": "string"}})(Server.t_reset)
+tool("limit_unit", "Cap how many of a unit type the AI may have; 0 bans it, null restores the original limit.",
+     {"unit": {"type": "string", "description": "unit type name, e.g. armflash"},
+      "limit": {"type": ["integer", "null"]}}, ("unit",))(Server.t_limit_unit)
+tool("build", "Order a structure at top priority; the nearest builder that can make it goes there. Metal "
+     "extractors snap to the nearest free metal spot. The kind (factory, energy, defence, mex, radar...) is "
+     "inferred unless given as type.",
+     {"unit": {"type": "string", "description": "structure name, e.g. armsolar, armllt, armmex"},
+      "type": {"type": "string"}, **WHERE}, ("unit",))(Server.t_build)
+tool("recruit", "Queue units at a factory at high priority (built before the AI's own picks; 20 queued at "
+     "most). Without factory, the first factory that can build them is used.",
+     {"unit": {"type": "string", "description": "unit name, e.g. armflash"},
+      "count": {"type": "integer", "description": "1-20, default 1"},
+      "factory": {"type": "integer", "description": "factory unit id"}}, ("unit",))(Server.t_recruit)
+tool("order_units",
+     "Give units a direct order. move/fight (attack-move)/stop take them out of the AI's hands for "
+     "`seconds` (default 120, max 1800), after which the AI uses them again; retreat sends them to the AI's "
+     "retreat behaviour; release hands them back now. Pick units by ids, or by role, unit type and/or the "
+     "sector they are in (structures are never selected). Prefer set_focus for steering the whole army; use "
+     "this for specific strikes or rescues.",
+     {"action": {"type": "string", "enum": ["fight", "move", "stop", "retreat", "release"]},
+      "units": {"type": "array", "items": {"type": "integer"}},
+      "role": {"type": "string"}, "unit": {"type": "string"},
+      "from_sector": {"type": "string", "description": "only units inside this sector"},
+      "x": {"type": "number"}, "z": {"type": "number"},
+      "to_sector": {"type": "string", "description": "destination sector, instead of x and z"},
+      "seconds": {"type": "integer"}}, ("action",))(Server.t_order_units)
+tool("set_focus",
+     "Point the AI's attack squads at an area. They only take targets within radius of it (nearest to it "
+     "first) and travel there when it is empty, still using their own tactics; force also makes them "
+     "attack even when outmatched. Lapses after seconds (default 300, max 3600). Defending squads and "
+     "raids are unaffected.",
+     {**WHERE, "radius": {"type": "number", "description": "default 1000 elmos"},
+      "force": {"type": "boolean"}, "seconds": {"type": "integer"}})(Server.t_set_focus)
+tool("clear_focus", "Let attack squads choose their own targets again.")(Server.t_clear_focus)
 
 
 def main():
