@@ -33,6 +33,8 @@ class IMainJob;
 
 class CInfluenceMap final {
 public:
+	friend class CBrainServer;
+
 	CInfluenceMap(CMapManager* manager);
 	~CInfluenceMap();
 

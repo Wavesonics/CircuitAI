@@ -26,6 +26,7 @@ class IMainJob;
 class CThreatMap final {
 public:
 	friend class CInitScript;
+	friend class CBrainServer;
 
 	CThreatMap(CMapManager* manager, float decloakRadius);
 	~CThreatMap();

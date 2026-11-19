@@ -70,6 +70,7 @@ public:
 	const std::set<CCircuitUnit*>& GetAssignees() const { return units; }
 	Priority GetPriority() const { return priority; }
 	Type GetType() const { return type; }
+	State GetState() const { return state; }
 	ITaskModule* GetManager() const { return manager; }
 
 	int GetLastTouched() const { return lastTouched; }

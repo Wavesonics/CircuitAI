@@ -68,6 +68,7 @@ class COOAICallback;
 class CEngine;
 class CMap;
 class CUnitAPI;
+class CBrainServer;
 #ifdef DEBUG_VIS
 class CDebugDrawer;
 #endif
@@ -301,6 +302,7 @@ public:
 	CFactoryManager*  GetFactoryManager()  const { return factoryManager.get(); }
 	CEconomyManager*  GetEconomyManager()  const { return economyManager.get(); }
 	CMilitaryManager* GetMilitaryManager() const { return militaryManager.get(); }
+	CBrainServer*     GetBrain()           const { return brain.get(); }
 
 	int GetAirCategory()    const { return category.air; }
 	int GetLandCategory()   const { return category.land; }
@@ -357,6 +359,7 @@ private:
 	std::shared_ptr<CEconomyManager> economyManager;
 	std::shared_ptr<CMilitaryManager> militaryManager;
 	std::vector<std::shared_ptr<IModule>> modules;
+	std::unique_ptr<CBrainServer> brain;  // nullptr unless BARB_BRAIN is set
 
 	friend class CInitScript;
 	CInitScript* script;  // owner

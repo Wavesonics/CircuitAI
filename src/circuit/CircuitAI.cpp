@@ -6,6 +6,7 @@
  */
 
 #include "CircuitAI.h"
+#include "brain/BrainServer.h"
 #include "scheduler/Scheduler.h"
 #include "script/ScriptManager.h"
 #include "script/InitScript.h"
@@ -728,6 +729,7 @@ int CCircuitAI::Init(int skirmishAIId, const struct SSkirmishAICallback* sAICall
 	setupManager->Welcome();
 
 	setupManager->CloseConfig();
+	brain = CBrainServer::Create(this);
 	isInitialized = true;
 
 	return 0;  // signaling: OK
@@ -735,6 +737,8 @@ int CCircuitAI::Init(int skirmishAIId, const struct SSkirmishAICallback* sAICall
 
 int CCircuitAI::Release(int reason)
 {
+	brain = nullptr;
+
 	delete economy, delete metalRes, delete energyRes;
 	economy = nullptr;
 	metalRes = energyRes = nullptr;
@@ -847,6 +851,10 @@ int CCircuitAI::Update(int frame)
 		script->Update();
 	}
 	UpdateActions();
+
+	if (brain != nullptr) {
+		brain->Update(frame);
+	}
 
 #ifdef DEBUG_VIS
 	if (frame % FRAMES_PER_SEC == 0) {
