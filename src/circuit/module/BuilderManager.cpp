@@ -6,6 +6,7 @@
  */
 
 #include "module/BuilderManager.h"
+#include "brain/DecisionTrace.h"
 #include "module/EconomyManager.h"
 #include "module/MilitaryManager.h"
 #include "module/FactoryManager.h"
@@ -945,7 +946,13 @@ IUnitTask* CBuilderManager::DefaultMakeTask(CCircuitUnit* unit)
 	if ((cdef->GetPower() > THREAT_MIN)
 		&& (circuit->GetMilitaryManager()->FindBCombatTarget(unit, pos, POWER_MOD, true) != nullptr))
 	{
-		return Enqueue(TaskB::Combat(POWER_MOD));
+		IUnitTask* task = Enqueue(TaskB::Combat(POWER_MOD));
+		CTraceScope trace(circuit, "builder", unit);
+		if (trace) {
+			trace->Step("enemy to fight near base", "yes");
+			trace->ResultTask(task);
+		}
+		return task;
 	}
 
 	const auto it = costQueries.find(unit);
@@ -954,6 +961,20 @@ IUnitTask* CBuilderManager::DefaultMakeTask(CCircuitUnit* unit)
 		return nullptr;
 	}
 
+	// Traced from here on: earlier exits are polling, not decisions
+	CTraceScope trace(circuit, "builder", unit);
+	if (trace) { trace->Step("enemy to fight near base", "no"); }
+	IUnitTask* task = MakeTaskWithCostMap(unit, pos, query);
+	if (trace) { trace->ResultTask(task); }
+	return task;
+}
+
+IUnitTask* CBuilderManager::MakeTaskWithCostMap(CCircuitUnit* unit, const AIFloat3& pos, std::shared_ptr<IPathQuery> query)
+{
+	const int frame = circuit->GetLastFrame();
+	const CCircuitDef* cdef = unit->GetCircuitDef();
+	CDecisionRecord* trace = CDecisionRecord::Active(circuit);
+
 	CPathFinder* pathfinder = circuit->GetPathfinder();
 	std::shared_ptr<IPathQuery> q = pathfinder->CreateCostMapQuery(unit, circuit->GetThreatMap(),
 			/*unit->IsAttrBase() ? circuit->GetSetupManager()->GetBasePos() : */pos, cdef->GetPower());
@@ -961,6 +982,7 @@ IUnitTask* CBuilderManager::DefaultMakeTask(CCircuitUnit* unit)
 	pathfinder->RunQuery(circuit->GetScheduler().get(), q);
 
 	if (query == nullptr) {
+		if (trace) { trace->Step("travel cost map", "first run, wait"); }
 		return Enqueue(TaskB::Wait(FRAMES_PER_SEC));  // 1st run
 	}
 
@@ -970,7 +992,9 @@ IUnitTask* CBuilderManager::DefaultMakeTask(CCircuitUnit* unit)
 		CEnemyManager* enemyMgr = circuit->GetEnemyManager();
 		const CSetupManager::SCommInfo::SHide* hide = circuit->GetSetupManager()->GetHide(cdef);
 		if (hide != nullptr) {
+			if (trace) { trace->Step("commander with hide rules", "yes"); }
 			if ((frame < hide->frame) || (GetWorkerCount() <= 2)) {
+				if (trace) { trace->Step("early game or few workers", "yes, peace radius"); }
 				return (hide->sqPeaceTaskRad < 0.f)
 						? MakeBuilderTask(unit, pQuery.get())
 						: MakeCommTask(unit, pQuery.get(), hide->sqPeaceTaskRad);
@@ -978,18 +1002,25 @@ IUnitTask* CBuilderManager::DefaultMakeTask(CCircuitUnit* unit)
 			if (circuit->GetInflMap()->GetEnemyInflAt(pos) >= hide->threat) {
 				dangerTime[unit] = frame;
 			}
+			if (trace) {
+				trace->Input("enemyInfluenceHere", circuit->GetInflMap()->GetEnemyInflAt(pos));
+				trace->Input("hideThreat", hide->threat);
+			}
 //			if ((enemyMgr->GetMobileThreat() / circuit->GetAllyTeam()->GetAliveSize() >= hide->threat)
 			if ((dangerTime[unit] + dangerHysteresis >= frame)
 				|| ((hide->isAir) && (enemyMgr->GetEnemyCost(ROLE_TYPE(AIR)) > 1.f)))
 			{
+				if (trace) { trace->Step("commander in danger", "yes, stay close to base"); }
 				return MakeCommTask(unit, pQuery.get(), hide->sqDangerTaskRad);
 			}
+			if (trace) { trace->Step("commander in danger", "no, peace radius"); }
 			return (hide->sqPeaceTaskRad < 0.f)
 					? MakeBuilderTask(unit, pQuery.get())
 					: MakeCommTask(unit, pQuery.get(), hide->sqPeaceTaskRad);
 		}
 	}
 
+	if (trace) { trace->Step("base builder (energizer)", unit->IsAttrBase() ? "yes" : "no"); }
 	return unit->IsAttrBase()
 			? MakeEnergizerTask(unit, pQuery.get())
 			: MakeBuilderTask(unit, pQuery.get());
@@ -1317,15 +1348,25 @@ IBuilderTask* CBuilderManager::MakeBuilderTask(CCircuitUnit* unit, const CQueryC
 	const float maxSpeed = cdef->GetSpeed() / pathfinder->GetSquareSize() * COST_BASE;
 	const int buildDistance = std::max<int>(cdef->GetBuildDistance(), pathfinder->GetSquareSize());
 	const float buildSqDistance = SQUARE(buildDistance);
+	CDecisionRecord* trace = CDecisionRecord::Active(circuit);
+	if (trace) {
+		trace->Input("economyNotReady", isNotReady);
+		trace->Input("unitPower", maxThreat);
+		trace->Step("score queued jobs", "lowest travel cost / (priority+1)^2 wins");
+	}
 	float metric = std::numeric_limits<float>::max();
 	for (const std::set<IBuilderTask*>& tasks : buildTasks) {
 		for (const IBuilderTask* candidate : tasks) {
-			if (!candidate->CanAssignTo(unit)
-				|| (isNotReady
-					&& (candidate->GetPriority() != IBuilderTask::Priority::NOW)
-					&& (candidate->GetBuildDef() != nullptr)
-					&& !economyMgr->IsIgnoreStallingPull(candidate)))
+			if (!candidate->CanAssignTo(unit)) {
+				if (trace) { trace->Reject("can't assign"); }
+				continue;
+			}
+			if (isNotReady
+				&& (candidate->GetPriority() != IBuilderTask::Priority::NOW)
+				&& (candidate->GetBuildDef() != nullptr)
+				&& !economyMgr->IsIgnoreStallingPull(candidate))
 			{
+				if (trace) { trace->Reject("economy not ready"); }
 				continue;
 			}
 
@@ -1336,6 +1377,7 @@ IBuilderTask* CBuilderManager::MakeBuilderTask(CCircuitUnit* unit, const CQueryC
 			if (candidate->GetPriority() == IBuilderTask::Priority::NOW) {
 				// Disregard safety
 				if (!terrainMgr->CanReachAt(unit, buildPos, cdef->GetBuildDistance())) {  // ensure that path always exists
+					if (trace) { trace->Reject("unreachable"); }
 					continue;
 				}
 
@@ -1343,9 +1385,15 @@ IBuilderTask* CBuilderManager::MakeBuilderTask(CCircuitUnit* unit, const CQueryC
 
 				CCircuitDef* buildDef = candidate->GetBuildDef();
 				const float buildThreat = (buildDef != nullptr) ? buildDef->GetPower() : 0.f;
-				if (!terrainMgr->CanReachAt(unit, buildPos, cdef->GetBuildDistance())  // ensure that path always exists
-					|| ((buildThreat < THREAT_MIN) && checkThreat(buildPos) && (inflMap->GetInfluenceAt(buildPos) < -INFL_EPS)))  // safety check
-				{
+				if (!terrainMgr->CanReachAt(unit, buildPos, cdef->GetBuildDistance())) {  // ensure that path always exists
+					if (trace) { trace->Reject("unreachable"); }
+					continue;
+				}
+				if ((buildThreat < THREAT_MIN) && checkThreat(buildPos) && (inflMap->GetInfluenceAt(buildPos) < -INFL_EPS)) {  // safety check
+					if (trace) {
+						trace->Option(BrainTaskLabel(candidate)).Pos(buildPos).Task(BrainTaskId(candidate))
+							.Reject("too dangerous");
+					}
 					continue;
 				}
 			}
@@ -1358,6 +1406,10 @@ IBuilderTask* CBuilderManager::MakeBuilderTask(CCircuitUnit* unit, const CQueryC
 			} else {
 				distCost = query->GetCostAt(buildPos, buildDistance);
 				if (distCost < 0.f) {  // path blocked by buildings or threat too high
+					if (trace) {
+						trace->Option(BrainTaskLabel(candidate)).Pos(buildPos).Task(BrainTaskId(candidate))
+							.Reject("path blocked or threatened");
+					}
 					continue;
 				}
 			}
@@ -1368,6 +1420,17 @@ IBuilderTask* CBuilderManager::MakeBuilderTask(CCircuitUnit* unit, const CQueryC
 			weight = 1.0f / SQUARE(weight);
 			bool valid = distCost * weight < metric;
 
+			CDecisionRecord::SOption* opt = nullptr;
+			if (trace) {
+				opt = &trace->Option(BrainTaskLabel(candidate)).Pos(buildPos).Task(BrainTaskId(candidate))
+					.Score(distCost * weight)
+					.Part("travelCost", distCost).Part("priority", static_cast<float>(candidate->GetPriority()))
+					.Part("priorityWeight", weight);
+				if (candidate->GetBuildDef() != nullptr) {
+					opt->Def(candidate->GetBuildDef()->GetId());
+				}
+			}
+
 			if (valid && !isClose) {
 				CCircuitUnit* target = candidate->GetTarget();
 				if (target != nullptr) {
@@ -1377,6 +1440,9 @@ IBuilderTask* CBuilderManager::MakeBuilderTask(CCircuitUnit* unit, const CQueryC
 					const float health = tu->GetHealth() - maxHealth * 0.005f;
 					const float healthSpeed = maxHealth * candidate->GetBuildPowerM() / candidate->GetCostM();
 					valid = ((maxHealth - health) * 0.6f) * maxSpeed > healthSpeed * distCost;
+					if (!valid && (opt != nullptr)) {
+						opt->Reject("would finish before arrival");
+					}
 				} else {
 					// valid = distCost < MAX_TRAVEL_SEC * maxSpeed;  // NOTE: distCost was too high in sectors occupied by structure
 				}
@@ -1385,14 +1451,17 @@ IBuilderTask* CBuilderManager::MakeBuilderTask(CCircuitUnit* unit, const CQueryC
 			if (valid) {
 				task = candidate;
 				metric = distCost * weight;
+				if (trace) { trace->ChooseLast(); }
 			}
 		}
 	}
 
 	if (task == nullptr) {
 		if ((unit->GetTask() != idleTask) || isNotReady) {
+			if (trace) { trace->Step("no job fits", "keep current task"); }
 			return nullptr;  // current task is in danger or unreachable
 		}
+		if (trace) { trace->Step("no job fits", "create a new one"); }
 		task = CreateBuilderTask(pos, unit);
 	}
 

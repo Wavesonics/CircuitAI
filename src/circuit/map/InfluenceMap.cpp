@@ -31,6 +31,7 @@ using namespace springai;
 CInfluenceMap::CInfluenceMap(CMapManager* manager)
 		: manager(manager)
 //		, vulnMax(0.f)
+		, pInflData(&inflData0)
 		, isUpdating(false)
 {
 	CCircuitAI* circuit = manager->GetCircuit();

@@ -53,6 +53,8 @@ public:
 		return *this;
 	}
 	CJsonOut& Null() { Sep(); buf += "null"; return *this; }
+	// Pre-serialised JSON value
+	CJsonOut& Raw(const std::string& json) { Sep(); buf += json; return *this; }
 
 	template<typename T> CJsonOut& Field(const char* k, T v) { Key(k); return Val(v); }
 

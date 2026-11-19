@@ -326,6 +326,7 @@ private:
 	virtual IUnitTask* DefaultMakeTask(CCircuitUnit* unit) override;
 	IBuilderTask* MakeEnergizerTask(CCircuitUnit* unit, const CQueryCostMap* query);
 	IBuilderTask* MakeCommTask(CCircuitUnit* unit, const CQueryCostMap* query, float sqMaxBaseRange);
+	IUnitTask* MakeTaskWithCostMap(CCircuitUnit* unit, const springai::AIFloat3& pos, std::shared_ptr<IPathQuery> query);
 	IBuilderTask* MakeBuilderTask(CCircuitUnit* unit, const CQueryCostMap* query);
 	IBuilderTask* CreateBuilderTask(const springai::AIFloat3& position, CCircuitUnit* unit);
 

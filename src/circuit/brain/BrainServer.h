@@ -20,6 +20,7 @@ namespace circuit {
 
 class CCircuitAI;
 class CJsonOut;
+class CDecisionRecord;
 
 class CBrainServer final {
 public:
@@ -35,6 +36,14 @@ public:
 	void Update(int frame);
 
 	int GetPort() const { return port; }
+
+	// Decision tracing. At most one record is active at a time; nested
+	// decisions fold into the outer one.
+	CDecisionRecord* GetActiveTrace() const { return activeTrace; }
+	// Spends rate budget; false when nobody listens or the budget is used up
+	bool TryStartTrace(int frame);
+	void SetActiveTrace(CDecisionRecord* record) { activeTrace = record; }
+	void EndTrace(const CDecisionRecord* record);
 
 private:
 	CBrainServer(CCircuitAI* circuit, int listenFd, int port);
@@ -60,7 +69,7 @@ private:
 	// BrainSnapshot.cpp
 	std::string MakeHello() const;
 	const std::string& GetMeta();
-	std::string MakeState(int frame) const;
+	std::string MakeState(int frame);
 	void WriteUnits(CJsonOut& js, int frame) const;
 	void WriteTasks(CJsonOut& js) const;
 	void WriteEnemies(CJsonOut& js) const;
@@ -75,6 +84,12 @@ private:
 
 	int stateInterval;  // frames between state snapshots
 	int lastStateFrame;
+
+	bool isTracing = true;
+	CDecisionRecord* activeTrace = nullptr;
+	int traceBudget;  // decisions left in the current one-second window
+	int traceWindowFrame = -1;
+	int droppedTraces = 0;  // since the last state, reported there
 };
 
 } // namespace circuit

@@ -6,6 +6,7 @@
  */
 
 #include "task/fighter/AttackTask.h"
+#include "brain/DecisionTrace.h"
 #include "map/InfluenceMap.h"
 #include "map/ThreatMap.h"
 #include "module/MilitaryManager.h"
@@ -258,20 +259,38 @@ void CAttackTask::FindTarget()
 	bool hasGoodTarget = false;
 
 	SetTarget(nullptr);  // make adequate enemy->GetTasks().size()
+	CTraceScope trace(circuit, "attackTarget", leader);
+	if (trace) {
+		trace->Input("squadPower", maxPower);
+		trace->Input("squadSize", static_cast<int>(units.size()));
+		trace->Step("score enemy groups", "lowest vagueMetric * dist^2 * scale wins");
+	}
+	int bestOption = -1;
 	const std::vector<CEnemyManager::SEnemyGroup>& groups = circuit->GetEnemyManager()->GetEnemyGroups();
 	for (unsigned i = 0; i < groups.size(); ++i) {
 		const CEnemyManager::SEnemyGroup& group = groups[i];
 		const bool isOverpowered = maxPower * 0.125f > group.influence;
-		if (hasGoodTarget && isOverpowered) {
-			continue;
-		}
 		const float distBE = group.pos.distance2D(basePos);  // Base to Enemy distance
 		const float scale = std::min(distBE / sqOBDist, 1.f);
-		if (((maxPower <= group.influence * scale) && (inflMap->GetInfluenceAt(group.pos) < INFL_SAFE))
-			|| !terrainMgr->CanMobileReachAt(area, group.pos, highestRange))
-		{
+		CDecisionRecord::SOption* opt = nullptr;
+		if (trace) {
+			opt = &trace->Option("group " + std::to_string(i) + " (" + std::to_string(group.units.size()) + " units)")
+				.Pos(group.pos).Part("influence", group.influence).Part("cost", group.cost)
+				.Part("vagueMetric", group.vagueMetric).Part("scale", scale);
+		}
+		if (hasGoodTarget && isOverpowered) {
+			if (opt) { opt->Reject("too weak to bother, better target found"); }
 			continue;
 		}
+		if ((maxPower <= group.influence * scale) && (inflMap->GetInfluenceAt(group.pos) < INFL_SAFE)) {
+			if (opt) { opt->Reject("too strong for this squad"); }
+			continue;
+		}
+		if (!terrainMgr->CanMobileReachAt(area, group.pos, highestRange)) {
+			if (opt) { opt->Reject("unreachable"); }
+			continue;
+		}
+		const int optIdx = trace ? (trace->OptionCount() - 1) : -1;
 
 		for (const ICoreUnit::Id eId : group.units) {
 			CEnemyInfo* enemy = circuit->GetEnemyInfo(eId);
@@ -317,17 +336,28 @@ void CAttackTask::FindTarget()
 			}
 
 			const float sqOEDist = group.vagueMetric * pos.SqDistance2D(ePos) * scale;  // Own to Enemy distance
+			if (opt && (std::isnan(opt->score) || (sqOEDist < opt->score))) {
+				opt->Score(sqOEDist);
+			}
 			if (minSqDist > sqOEDist) {
 				minSqDist = sqOEDist;
 				bestTarget = enemy;
+				bestOption = optIdx;
 				hasGoodTarget |= !isOverpowered;
 			}
+		}
+		if (opt && std::isnan(opt->score)) {
+			opt->Reject("no targetable unit in group");
 		}
 	}
 
 	if (bestTarget != nullptr) {
 		SetTarget(bestTarget);
 		position = GetTarget()->GetPos();
+	}
+	if (trace) {
+		trace->Choose(bestOption);
+		trace->Result((bestTarget != nullptr) ? ("attack enemy " + std::to_string(bestTarget->GetId())) : "no target");
 	}
 	// Return: target, startPos=leader->pos, endPos=position
 }

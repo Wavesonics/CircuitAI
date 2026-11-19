@@ -6,6 +6,7 @@
  */
 
 #include "module/FactoryManager.h"
+#include "brain/DecisionTrace.h"
 #include "module/EconomyManager.h"
 #include "module/BuilderManager.h"
 #include "module/MilitaryManager.h"
@@ -1044,6 +1045,11 @@ CRecruitTask* CFactoryManager::UpdateBuildPower(CCircuitUnit* unit, bool isActiv
 	CEconomyManager* economyMgr = circuit->GetEconomyManager();
 	const float metalIncome = std::min(economyMgr->GetAvgMetalIncome(), economyMgr->GetAvgEnergyIncome());
 	const int r = rand();
+	if (CDecisionRecord* trace = CDecisionRecord::Active(circuit)) {
+		trace->Input("buildPower", circuit->GetBuilderManager()->GetBuildPower());
+		trace->Input("buildPowerWanted", metalIncome * bpRatio);
+		trace->Input("builderCoinFlip", isActive && (r >= RAND_MAX / 2));
+	}
 	if ((circuit->GetBuilderManager()->GetBuildPower() >= metalIncome * bpRatio)
 		|| (isActive && (r >= RAND_MAX / 2)))
 	{
@@ -1433,8 +1439,10 @@ void CFactoryManager::DisableFactory(CCircuitUnit* unit)
 IUnitTask* CFactoryManager::DefaultMakeTask(CCircuitUnit* unit)
 {
 	const IUnitTask* task = nullptr;
+	CTraceScope trace(circuit, "factory", unit);
 
 	if (unit->GetCircuitDef()->IsAssist()) {
+		if (trace) { trace->Step("assist unit", "yes"); }
 		task = CreateAssistTask(unit);
 
 	} else {
@@ -1446,22 +1454,27 @@ IUnitTask* CFactoryManager::DefaultMakeTask(CCircuitUnit* unit)
 			}
 		}
 
+		if (trace) { trace->Step("queued recruit fits", (task != nullptr) ? "take it" : "none"); }
 		if (task == nullptr) {
 			task = CreateFactoryTask(unit);
 		}
 	}
 
+	if (trace) { trace->ResultTask(task); }
 	return const_cast<IUnitTask*>(task);  // if nullptr then continue to Wait (or Idle)
 }
 
 IUnitTask* CFactoryManager::CreateFactoryTask(CCircuitUnit* unit)
 {
+	CDecisionRecord* trace = CDecisionRecord::Active(circuit);
 	if (unit->GetCircuitDef()->GetMobileId() < 0) {
 		if (circuit->GetEnemyManager()->IsAirValid()) {
+			if (trace) { trace->Step("air allowed vs enemy AA", "yes"); }
 			if (validAir.find(unit) == validAir.end()) {
 				EnableFactory(unit);
 			}
 		} else {
+			if (trace) { trace->Step("air allowed vs enemy AA", "no"); }
 			if (validAir.find(unit) != validAir.end()) {
 				DisableFactory(unit);
 			}
@@ -1470,8 +1483,10 @@ IUnitTask* CFactoryManager::CreateFactoryTask(CCircuitUnit* unit)
 	}
 
 	const bool isActive = (noT1FacCount <= 0) || !IsT1Factory(unit->GetCircuitDef());
+	if (trace) { trace->Input("isActive", isActive); }
 
 	IUnitTask* task = UpdateBuildPower(unit, isActive);
+	if (trace) { trace->Step("need more build power", (task != nullptr) ? "yes" : "no"); }
 	if (task != nullptr) {
 		return task;
 	}
@@ -1481,11 +1496,17 @@ IUnitTask* CFactoryManager::CreateFactoryTask(CCircuitUnit* unit)
 							(economyMgr->GetAvgMetalIncome() * 1.2f < economyMgr->GetMetalPull()) &&
 							(metalPull * economyMgr->GetPullMtoS() > circuit->GetBuilderManager()->GetMetalPull());
 	const bool isNotReady = !economyMgr->IsExcessed() || isStalling;
+	if (trace) {
+		trace->Input("excessed", economyMgr->IsExcessed());
+		trace->Input("stalling", isStalling);
+		trace->Step("economy ready", isNotReady ? "no" : "yes");
+	}
 	if (isNotReady) {
 		return Enqueue(TaskS::Wait(false, FRAMES_PER_SEC * 3));
 	}
 
 	task = UpdateFirePower(unit, isActive);
+	if (trace) { trace->Step("pick fighting unit", (task != nullptr) ? "picked" : "nothing available"); }
 	if (task != nullptr) {
 		return task;
 	}
@@ -1649,6 +1670,7 @@ CFactoryManager::SRecruitDef CFactoryManager::RequiredFireDef(CCircuitUnit* buil
 #ifdef FACTORY_CHOICE
 	circuit->LOG("---- FACTORY AI = %i | %s | %s | tier%i ----", circuit->GetSkirmishAIId(), builder->GetCircuitDef()->GetDef()->GetName(), unitTypeDbg.c_str(), tierDbg);
 #endif
+	CDecisionRecord* trace = CDecisionRecord::Active(circuit);
 	CCircuitDef* buildDef = nullptr;
 	bool isResponse = false;
 	std::tie(buildDef, isResponse) = GetLastRequiredDef(it->first, probs, isAvailableDef);
@@ -1656,6 +1678,7 @@ CFactoryManager::SRecruitDef CFactoryManager::RequiredFireDef(CCircuitUnit* buil
 #ifdef FACTORY_CHOICE
 		circuit->LOG("batch %s", buildDef->GetDef()->GetName());
 #endif
+		if (trace) { trace->Step("continue response batch", buildDef->GetDef()->GetName()); }
 		return {buildDef->GetId(), getPriority(isResponse)};
 	}
 
@@ -1667,33 +1690,40 @@ CFactoryManager::SRecruitDef CFactoryManager::RequiredFireDef(CCircuitUnit* buil
 	std::vector<SCandidate> candidates;
 	candidates.reserve(facDef.buildDefs.size());
 
+	auto unavailableReason = [&](CCircuitDef* bd) -> const char* {
+		if ((bd->GetCloakCost() > .1f)/* && (energyNet < bd->GetCloakCost())*/ && isEnergyStalling) {
+			return "no energy";
+		} else if (!bd->IsAvailable(frame)) {
+			return "limit exceeded or frame < since";
+		} else if (!isActive && !bd->IsAttrRare()) {
+			return "non-rare from inactive factory";
+		} else if (!terrainMgr->CanBeBuiltAt(bd, pos, range)) {
+			return "can't build unit at unusable map position";
+		} else if (!isEnemyInArea(bd)) {
+			return "no enemies in related map area";
+		}
+		return "unavailable";
+	};
+
 	CMilitaryManager* militaryMgr = circuit->GetMilitaryManager();
 	const float maxCost = militaryMgr->GetArmyCost();
+	if (trace) { trace->Input("armyCost", maxCost); }
+	const int optionBase = trace ? trace->OptionCount() : 0;
 	float magnitude = 0.f;
 	for (unsigned i = 0; i < facDef.buildDefs.size(); ++i) {
 		CCircuitDef* bd = facDef.buildDefs[i];
 		if (!isAvailableDef(bd)) {
 #ifdef FACTORY_CHOICE
-			std::string reason;
-			if ((bd->GetCloakCost() > .1f)/* && (energyNet < bd->GetCloakCost())*/ && isEnergyStalling) {
-				reason = "no energy";
-			} else if (!bd->IsAvailable(frame)) {
-				reason = "limit exceeded or frame < since";
-			} else if (!isActive && !bd->IsAttrRare()) {
-				reason = "non-rare from inactive factory";
-			} else if (!terrainMgr->CanBeBuiltAt(bd, pos, range)) {
-				reason = "can't build unit at unusable map position";
-			} else if (!isEnemyInArea(bd)) {
-				reason = "no enemies in related map area";
-			}
-			circuit->LOG("ignore %s | reason = %s", bd->GetDef()->GetName(), reason.c_str());
+			circuit->LOG("ignore %s | reason = %s", bd->GetDef()->GetName(), unavailableReason(bd));
 #endif
+			if (trace) { trace->Reject(unavailableReason(bd)); }
 			continue;
 		}
 
 		if (probs[i] > 0.f) {
 			// (probs[i] + response_weight) hints preferable buildDef within same role
-			float prob = militaryMgr->RoleProbability(bd) * (probs[i] + reWeight);
+			const float roleProb = militaryMgr->RoleProbability(bd);
+			float prob = roleProb * (probs[i] + reWeight);
 			// NOTE: with probs=[n1, n2, n3, n4, n5]
 			//       previous response system provided probs2=[0, res(n2), 0, 0, res(n5)]
 			//       current is probs2=[n1, res(n2), n3, n4, res(n5)]
@@ -1705,6 +1735,12 @@ CFactoryManager::SRecruitDef CFactoryManager::RequiredFireDef(CCircuitUnit* buil
 #ifdef FACTORY_CHOICE
 			circuit->LOG("%s | %s | %f", isResp ? "response" : "regular", bd->GetDef()->GetName(), prob);
 #endif
+			if (trace) {
+				trace->Option(bd->GetDef()->GetName()).Def(bd->GetId()).Score(prob)
+					.Part("tierProb", probs[i]).Part("roleProb", roleProb).Part("response", isResp ? 1.f : 0.f);
+			}
+		} else if (trace) {
+			trace->Reject("zero weight at this tier");
 		}
 	}
 
@@ -1712,23 +1748,37 @@ CFactoryManager::SRecruitDef CFactoryManager::RequiredFireDef(CCircuitUnit* buil
 #ifdef FACTORY_CHOICE
 		circuit->LOG("batch %s", buildDef->GetDef()->GetName());
 #endif
+		if (trace) { trace->Step("continue regular batch", buildDef->GetDef()->GetName()); }
 		return {buildDef->GetId(), getPriority(isResponse)};
 	}
 
+	int chosenIdx = -1;
 	if (magnitude == 0.f) {  // workaround for disabled units
 		if (!candidates.empty()) {
-			buildDef = candidates[rand() % candidates.size()].cdef;
+			chosenIdx = rand() % candidates.size();
+			buildDef = candidates[chosenIdx].cdef;
 		}
+		if (trace) { trace->Step("weighted roll", "all weights zero, uniform pick"); }
 	} else {
-		float dice = (float)rand() / RAND_MAX * magnitude;
-		for (const SCandidate& candy : candidates) {
+		const float roll = (float)rand() / RAND_MAX;
+		float dice = roll * magnitude;
+		for (unsigned i = 0; i < candidates.size(); ++i) {
+			const SCandidate& candy = candidates[i];
 			dice -= candy.weight;
 			if (dice < 0.f) {
 				buildDef = candy.cdef;
 				isResponse = candy.isResponse;
+				chosenIdx = i;
 				break;
 			}
 		}
+		if (trace) {
+			trace->Input("roll", roll);
+			trace->Step("weighted roll", (buildDef != nullptr) ? "picked" : "no pick");
+		}
+	}
+	if (trace && (chosenIdx >= 0) && (optionBase + chosenIdx < trace->OptionCount())) {
+		trace->Choose(optionBase + chosenIdx);
 	}
 
 	SetLastRequiredDef(it->first, buildDef, probs, isResponse);

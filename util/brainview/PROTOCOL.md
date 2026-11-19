@@ -51,7 +51,8 @@ Sent every `stateEvery` frames (default 30, one per second at normal speed).
   enemyMobileCost, airValid, roleCost[], enemyRoleCost[]}`, role arrays indexed
   by role id
 - `layers`: float grids. Threat layers use `threatGrid`, influence layers use
-  `inflGrid`:
+  `inflGrid`. Threat layers are empty strings for the first few frames, until
+  the threat map initialises:
   - `threatAir`, `threatSurf`, `threatAmph`, `threatCloak`
   - `inflEnemy`, `inflAlly`, `inflAllyDefend`, `influence` (ally minus enemy)
 - `openSpots`: string of `0`/`1` per metal spot, `1` meaning free to claim

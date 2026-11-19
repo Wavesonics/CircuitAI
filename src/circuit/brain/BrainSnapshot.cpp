@@ -6,6 +6,7 @@
  */
 
 #include "brain/BrainServer.h"
+#include "brain/DecisionTrace.h"
 #include "brain/JsonOut.h"
 #include "CircuitAI.h"
 #include "map/InfluenceMap.h"
@@ -44,12 +45,6 @@ static_assert(sizeof(FIGHT_NAMES) / sizeof(FIGHT_NAMES[0]) == static_cast<size_t
 
 // Indexed by IUnitTask::Type
 const char* const TASK_TYPE_NAMES[] = {"nil", "player", "idle", "wait", "retreat", "builder", "factory", "fighter"};
-
-uint64_t TaskId(const IUnitTask* task)
-{
-	// Pointer identity, masked to stay exact in a JS double
-	return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(task)) & ((uint64_t(1) << 53) - 1);
-}
 
 void WritePos(CJsonOut& js, const AIFloat3& pos)
 {
@@ -226,12 +221,14 @@ const std::string& CBrainServer::GetMeta()
 	return meta;
 }
 
-std::string CBrainServer::MakeState(int frame) const
+std::string CBrainServer::MakeState(int frame)
 {
 	CJsonOut js;
 	js.BeginObj()
 		.Field("t", "state")
-		.Field("frame", frame);
+		.Field("frame", frame)
+		.Field("droppedDecisions", droppedTraces);
+	droppedTraces = 0;
 
 	CSetupManager* setupMgr = circuit->GetSetupManager();
 	CEnemyManager* enemyMgr = circuit->GetEnemyManager();
@@ -291,7 +288,7 @@ void CBrainServer::WriteUnits(CJsonOut& js, int frame) const
 			.Val(unit->GetCircuitDef()->GetId())
 			.Val(pos.x).Val(pos.z)
 			.Val(unit->GetHealthPercent())
-			.Val(TaskId(unit->GetTask()))
+			.Val(BrainTaskId(unit->GetTask()))
 		.EndArr();
 	}
 	js.EndArr();
@@ -329,7 +326,7 @@ void CBrainServer::WriteTasks(CJsonOut& js) const
 	js.Key("tasks").BeginArr();
 	for (IUnitTask* task : tasks) {
 		js.BeginObj()
-			.Field("id", TaskId(task))
+			.Field("id", BrainTaskId(task))
 			.Field("type", static_cast<int>(task->GetType()))
 			.Field("prio", static_cast<int>(task->GetPriority()))
 			.Field("state", static_cast<int>(task->GetState()))

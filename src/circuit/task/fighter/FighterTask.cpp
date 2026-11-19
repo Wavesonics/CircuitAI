@@ -6,6 +6,7 @@
  */
 
 #include "task/fighter/FighterTask.h"
+#include "brain/DecisionTrace.h"
 #include "task/RetreatTask.h"
 #include "map/InfluenceMap.h"
 #include "map/ThreatMap.h"
@@ -113,6 +114,16 @@ void IFighterTask::OnUnitDamaged(CCircuitUnit* unit, CEnemyInfo* attacker)
 	}
 
 	const float healthPerc = unit->GetHealthPercent();
+	auto traceRetreat = [&](const char* trigger) {
+		CTraceScope trace(circuit, "retreat", unit);
+		if (trace) {
+			trace->Input("health", healthPerc);
+			trace->Input("retreatBelow", cdef->GetRetreat());
+			trace->Input("hasTarget", target != nullptr);
+			trace->Step("retreat trigger", trigger);
+			trace->Result("retreat");
+		}
+	};
 
 	if (unit->HasShield()) {
 		const float minShield = circuit->GetSetupManager()->GetEmptyShield();
@@ -131,6 +142,7 @@ void IFighterTask::OnUnitDamaged(CCircuitUnit* unit, CEnemyInfo* attacker)
 		}
 		return;
 	} else if (healthPerc < 0.2f) {  // stuck units workaround: they don't shoot and don't see distant threat
+		traceRetreat("health below 20%");
 		CRetreatTask* task = manager->EnqueueRetreat();
 		manager->AssignTask(unit, task);
 		return;
@@ -139,6 +151,7 @@ void IFighterTask::OnUnitDamaged(CCircuitUnit* unit, CEnemyInfo* attacker)
 	CThreatMap* threatMap = circuit->GetThreatMap();
 	const float range = cdef->GetMaxRange();
 	if ((target == nullptr) || !target->IsInLOS()) {
+		traceRetreat("damaged with no visible target");
 		CRetreatTask* task = manager->EnqueueRetreat();
 		manager->AssignTask(unit, task);
 		return;
@@ -147,6 +160,8 @@ void IFighterTask::OnUnitDamaged(CCircuitUnit* unit, CEnemyInfo* attacker)
 	if ((target->GetPos().SqDistance2D(pos) > SQUARE(range)) ||
 		(threatMap->GetThreatAt(unit, pos) * 2 > threatMap->GetUnitPower(unit)))
 	{
+		traceRetreat((target->GetPos().SqDistance2D(pos) > SQUARE(range))
+				? "target out of range" : "local threat over half own power");
 		CRetreatTask* task = manager->EnqueueRetreat();
 		manager->AssignTask(unit, task);
 		return;

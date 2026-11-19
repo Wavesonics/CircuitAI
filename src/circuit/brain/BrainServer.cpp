@@ -5,6 +5,7 @@
  */
 
 #include "brain/BrainServer.h"
+#include "brain/DecisionTrace.h"
 #include "CircuitAI.h"
 #include "util/Utils.h"
 
@@ -36,6 +37,7 @@ constexpr int DEFAULT_STATE_INTERVAL = FRAMES_PER_SEC;
 constexpr int MIN_STATE_INTERVAL = 1;
 constexpr int MAX_STATE_INTERVAL = FRAMES_PER_SEC * 60;
 constexpr size_t MAX_CLIENTS = 8;
+constexpr int DEFAULT_TRACE_BUDGET = 120;  // decisions per second of game time
 constexpr size_t MAX_LINE = 64 * 1024;
 // Inbound bytes drained per client per frame, so a chatty client cannot stall the sim
 constexpr size_t MAX_READ_PER_UPDATE = 256 * 1024;
@@ -136,6 +138,7 @@ CBrainServer::CBrainServer(CCircuitAI* circuit, int listenFd, int port)
 	, port(port)
 	, stateInterval(DEFAULT_STATE_INTERVAL)
 	, lastStateFrame(-1)
+	, traceBudget(DEFAULT_TRACE_BUDGET)
 {
 }
 
@@ -169,6 +172,34 @@ void CBrainServer::Update(int frame)
 			it = clients.erase(it);
 		} else {
 			++it;
+		}
+	}
+}
+
+bool CBrainServer::TryStartTrace(int frame)
+{
+	if (!isTracing || clients.empty()) {
+		return false;
+	}
+	if ((traceWindowFrame < 0) || (frame - traceWindowFrame >= FRAMES_PER_SEC)) {
+		traceWindowFrame = frame;
+		traceBudget = DEFAULT_TRACE_BUDGET;
+	}
+	if (traceBudget <= 0) {
+		++droppedTraces;
+		return false;
+	}
+	--traceBudget;
+	return true;
+}
+
+void CBrainServer::EndTrace(const CDecisionRecord* record)
+{
+	activeTrace = nullptr;
+	const std::string line = record->Serialize();
+	for (SClient& c : clients) {
+		if (c.Backlog() < STATE_SKIP_BACKLOG) {
+			Send(c, line);
 		}
 	}
 }
@@ -301,6 +332,10 @@ void CBrainServer::HandleLine(SClient& client, const std::string& line)
 		const Json::Value& every = msg["stateEvery"];
 		if (every.isInt()) {
 			stateInterval = std::max(MIN_STATE_INTERVAL, std::min(every.asInt(), MAX_STATE_INTERVAL));
+		}
+		const Json::Value& decisions = msg["decisions"];
+		if (decisions.isBool()) {
+			isTracing = decisions.asBool();
 		}
 	} else if (type == "meta") {
 		Send(client, GetMeta());

@@ -52,10 +52,11 @@ public:
 	float* GetAmphThreatArray(CCircuitDef::RoleT type) { return pThreatData.load()->roleThreatPtrs[type]->amphThreat.data(); }
 	float* GetSwimThreatArray(CCircuitDef::RoleT type) { return pThreatData.load()->roleThreatPtrs[type]->swimThreat.data(); }
 	float* GetCloakThreatArray() { return cloakThreat; }
-	// Read-only default-role layers; the front buffer is only swapped on the main thread
-	const FloatVec& GetDefAirThreat() const { return pThreatData.load()->defThreat->airThreat; }
-	const FloatVec& GetDefSurfThreat() const { return pThreatData.load()->defThreat->surfThreat; }
-	const FloatVec& GetDefAmphThreat() const { return pThreatData.load()->defThreat->amphThreat; }
+	// Read-only default-role layers; the front buffer is only swapped on the main thread.
+	// Empty until Init() runs, which happens a few frames into the game.
+	const FloatVec& GetDefAirThreat() const { return GetDefLayer(&SRoleThreat::airThreat); }
+	const FloatVec& GetDefSurfThreat() const { return GetDefLayer(&SRoleThreat::surfThreat); }
+	const FloatVec& GetDefAmphThreat() const { return GetDefLayer(&SRoleThreat::amphThreat); }
 	const FloatVec& GetCloakThreat() const { return pThreatData.load()->cloakThreat; }
 	int GetThreatMapWidth() const { return width; }
 	int GetThreatMapHeight() const { return height; }
@@ -80,7 +81,7 @@ private:
 	struct SThreatData {
 		std::map<CCircuitDef::RoleT, SRoleThreat> roleThreats;
 		std::vector<SRoleThreat*> roleThreatPtrs;
-		SRoleThreat* defThreat;  // default when role is not modded
+		SRoleThreat* defThreat = nullptr;  // default when role is not modded
 		FloatVec cloakThreat;  // decloakers
 		FloatVec shield;  // total shield power that covers tile
 	};
@@ -113,6 +114,11 @@ private:
 	std::shared_ptr<IMainJob> ApplyDrawers();
 	void Apply();
 	void SwapBuffers();
+	const FloatVec& GetDefLayer(FloatVec SRoleThreat::* layer) const {
+		static const FloatVec empty;
+		const SRoleThreat* thr = pThreatData.load()->defThreat;
+		return (thr != nullptr) ? thr->*layer : empty;
+	}
 	SThreatData* GetNextThreatData() {
 		return (pThreatData.load() == &threatData0) ? &threatData1 : &threatData0;
 	}
