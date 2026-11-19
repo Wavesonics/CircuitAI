@@ -142,6 +142,7 @@ void ITaskModule::Update()
 			if ((frame != -1) && (timeout > 0) && (lastFrame - frame >= timeout)) {
 				AbortTask(task);
 			} else {
+				task->CheckMembers();
 				task->Update();
 			}
 			++updateIterator;

@@ -17,6 +17,8 @@
 #include "CircuitAI.h"
 #include "util/Utils.h"
 
+#include "Log.h"
+
 #include <cmath>
 
 namespace circuit {
@@ -330,9 +332,38 @@ bool ISquadTask::IsMustRegroup()
 	return State::REGROUP == state;
 }
 
+void ISquadTask::CheckMembers()
+{
+	for (CCircuitUnit* unit : units) {
+		if ((unit->GetTravelAct() == nullptr) || (unit->GetTask() != this)) {
+			ReportBrokenMember(unit, "CheckMembers");
+		}
+	}
+}
+
+void ISquadTask::ReportBrokenMember(CCircuitUnit* unit, const char* where)
+{
+	if (!reportedMembers.insert(unit).second) {
+		return;
+	}
+	CCircuitAI* circuit = manager->GetCircuit();
+	const IUnitTask* owner = unit->GetTask();
+	circuit->LOG("Task guard [%s]: AI %i frame %i squad %p (fight %i, %i units) holds unit %i (%s, dead %i)"
+			" whose task is %p (type %i) and travel action is %s",
+			where, circuit->GetSkirmishAIId(), circuit->GetLastFrame(), this, static_cast<int>(fightType),
+			static_cast<int>(units.size()), unit->GetId(), unit->GetCircuitDef()->GetDef()->GetName(),
+			unit->IsDead(), owner, (owner != nullptr) ? static_cast<int>(owner->GetType()) : -1,
+			(unit->GetTravelAct() != nullptr) ? "set" : "missing");
+}
+
 void ISquadTask::ActivePath(float speed)
 {
 	for (CCircuitUnit* unit : units) {
+		if (unit->GetTravelAct() == nullptr) {
+			// Path callbacks can land between updates, before CheckMembers sees the unit
+			ReportBrokenMember(unit, "ActivePath");
+			continue;
+		}
 		unit->GetTravelAct()->SetPath(pPath, speed);
 	}
 }

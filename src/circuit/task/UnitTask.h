@@ -52,6 +52,8 @@ public:
 
 	virtual void Start(CCircuitUnit* unit) = 0;  // <=> IAction::OnStart()
 	virtual void Update() = 0;
+	// Checks that assignees really belong to this task; logs violations
+	virtual void CheckMembers() {}
 	virtual void Stop(bool done);  // <=> IAction::OnEnd()
 protected:
 	// NOTE: Do not run time consuming code here. Instead create separate task.

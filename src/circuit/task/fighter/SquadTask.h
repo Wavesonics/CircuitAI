@@ -25,6 +25,7 @@ public:
 	virtual void RemoveAssignee(CCircuitUnit* unit) override;
 
 	virtual void Merge(ISquadTask* task);
+	virtual void CheckMembers() override;
 
 	const std::map<float, std::set<CCircuitUnit*>>& GetRangeUnits() const { return rangeUnits; }
 
@@ -42,6 +43,10 @@ protected:
 	bool IsMustRegroup();
 	void ActivePath(float speed = NO_SPEED_LIMIT);
 	NSMicroPather::HitFunc GetHitTest() const;
+	// Logs (once per unit) an assignee that lost its travel action or belongs to
+	// another task. Squad code dereferences GetTravelAct() for every assignee,
+	// so such a unit would crash the engine.
+	void ReportBrokenMember(CCircuitUnit* unit, const char* where);
 	void Attack(const int frame);
 	void Attack(const int frame, const bool isGround);
 
@@ -57,6 +62,10 @@ protected:
 
 	std::map<float, std::set<CCircuitUnit*>> rangeUnits;
 
+private:
+	std::set<const CCircuitUnit*> reportedMembers;
+
+protected:
 	int groupFrame;
 	int attackFrame;
 
