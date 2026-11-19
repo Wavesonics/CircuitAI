@@ -1084,7 +1084,7 @@ CRecruitTask* CFactoryManager::UpdateFirePower(CCircuitUnit* builder, bool isAct
 	}
 
 	CFactoryManager* factoryMgr = circuit->IsSlave() ? circuit->GetAllyTeam()->GetLeader()->GetFactoryManager() : this;
-	SRecruitDef result = factoryMgr->RequiredFireDef(builder, isActive);
+	SRecruitDef result = factoryMgr->RequiredFireDef(builder, isActive, CDecisionRecord::Active(circuit));
 	if (result.id < 0) {
 		return nullptr;
 	}
@@ -1626,7 +1626,7 @@ std::pair<CCircuitDef*, bool> CFactoryManager::GetLastRequiredDef(CCircuitDef::I
 	return std::make_pair(nullptr, false);
 }
 
-CFactoryManager::SRecruitDef CFactoryManager::RequiredFireDef(CCircuitUnit* builder, bool isActive)
+CFactoryManager::SRecruitDef CFactoryManager::RequiredFireDef(CCircuitUnit* builder, bool isActive, CDecisionRecord* trace)
 {
 	auto it = factoryDefs.find(builder->GetCircuitDef()->GetId());
 	if (it == factoryDefs.end()) {
@@ -1654,12 +1654,22 @@ CFactoryManager::SRecruitDef CFactoryManager::RequiredFireDef(CCircuitUnit* buil
 		std::tie(area, isValid) = terrainMgr->GetCurrentMapArea(bd, iS);
 		return isValid && ((area == nullptr) || terrainMgr->IsEnemyInArea(area));
 	};
+	auto unavailableReason = [&](CCircuitDef* bd) -> const char* {
+		if (!((bd->GetCloakCost() < .1f)/* || (energyNet > bd->GetCloakCost())*/ || !isEnergyStalling)) {
+			return "no energy";
+		} else if (!bd->IsAvailable(frame)) {
+			return "limit exceeded or frame < since";
+		} else if (!isActive && !bd->IsAttrRare()) {
+			return "non-rare from inactive factory";
+		} else if (!terrainMgr->CanBeBuiltAt(bd, pos, range)) {
+			return "can't build unit at unusable map position";
+		} else if (!isEnemyInArea(bd)) {
+			return "no enemies in related map area";
+		}
+		return nullptr;
+	};
 	auto isAvailableDef = [&](CCircuitDef* bd) {
-		return (((bd->GetCloakCost() < .1f)/* || (energyNet > bd->GetCloakCost())*/ || !isEnergyStalling)
-			&& bd->IsAvailable(frame)
-			&& (isActive || bd->IsAttrRare())
-			&& terrainMgr->CanBeBuiltAt(bd, pos, range)
-			&& isEnemyInArea(bd));
+		return unavailableReason(bd) == nullptr;
 	};
 
 	const std::vector<float>& probs = GetFacTierProbs(facDef);
@@ -1670,7 +1680,6 @@ CFactoryManager::SRecruitDef CFactoryManager::RequiredFireDef(CCircuitUnit* buil
 #ifdef FACTORY_CHOICE
 	circuit->LOG("---- FACTORY AI = %i | %s | %s | tier%i ----", circuit->GetSkirmishAIId(), builder->GetCircuitDef()->GetDef()->GetName(), unitTypeDbg.c_str(), tierDbg);
 #endif
-	CDecisionRecord* trace = CDecisionRecord::Active(circuit);
 	CCircuitDef* buildDef = nullptr;
 	bool isResponse = false;
 	std::tie(buildDef, isResponse) = GetLastRequiredDef(it->first, probs, isAvailableDef);
@@ -1690,21 +1699,6 @@ CFactoryManager::SRecruitDef CFactoryManager::RequiredFireDef(CCircuitUnit* buil
 	std::vector<SCandidate> candidates;
 	candidates.reserve(facDef.buildDefs.size());
 
-	auto unavailableReason = [&](CCircuitDef* bd) -> const char* {
-		if ((bd->GetCloakCost() > .1f)/* && (energyNet < bd->GetCloakCost())*/ && isEnergyStalling) {
-			return "no energy";
-		} else if (!bd->IsAvailable(frame)) {
-			return "limit exceeded or frame < since";
-		} else if (!isActive && !bd->IsAttrRare()) {
-			return "non-rare from inactive factory";
-		} else if (!terrainMgr->CanBeBuiltAt(bd, pos, range)) {
-			return "can't build unit at unusable map position";
-		} else if (!isEnemyInArea(bd)) {
-			return "no enemies in related map area";
-		}
-		return "unavailable";
-	};
-
 	CMilitaryManager* militaryMgr = circuit->GetMilitaryManager();
 	const float maxCost = militaryMgr->GetArmyCost();
 	if (trace) { trace->Input("armyCost", maxCost); }
@@ -1712,11 +1706,12 @@ CFactoryManager::SRecruitDef CFactoryManager::RequiredFireDef(CCircuitUnit* buil
 	float magnitude = 0.f;
 	for (unsigned i = 0; i < facDef.buildDefs.size(); ++i) {
 		CCircuitDef* bd = facDef.buildDefs[i];
-		if (!isAvailableDef(bd)) {
+		const char* whyNot = unavailableReason(bd);
+		if (whyNot != nullptr) {
 #ifdef FACTORY_CHOICE
-			circuit->LOG("ignore %s | reason = %s", bd->GetDef()->GetName(), unavailableReason(bd));
+			circuit->LOG("ignore %s | reason = %s", bd->GetDef()->GetName(), whyNot);
 #endif
-			if (trace) { trace->Reject(unavailableReason(bd)); }
+			if (trace) { trace->Reject(whyNot); }
 			continue;
 		}
 

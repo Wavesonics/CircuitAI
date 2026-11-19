@@ -120,6 +120,14 @@ void IFighterTask::OnUnitDamaged(CCircuitUnit* unit, CEnemyInfo* attacker)
 			trace->Input("health", healthPerc);
 			trace->Input("retreatBelow", cdef->GetRetreat());
 			trace->Input("hasTarget", target != nullptr);
+			// Retreat is only considered once one of these gates opens
+			if (healthPerc <= cdef->GetRetreat()) {
+				trace->Step("retreat gate", "health at or below retreat threshold");
+			} else if (unit->HasShield()) {
+				trace->Step("retreat gate", "shield not charged");
+			} else {
+				trace->Step("retreat gate", "disarmed");
+			}
 			trace->Step("retreat trigger", trigger);
 			trace->Result("retreat");
 		}

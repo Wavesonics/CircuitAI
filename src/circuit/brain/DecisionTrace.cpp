@@ -22,6 +22,7 @@ CDecisionRecord::CDecisionRecord(CCircuitAI* circuit, const char* kind, CCircuit
 	: kind(kind)
 	, frame(circuit->GetLastFrame())
 {
+	options.reserve(MAX_OPTIONS);
 	inputs.BeginObj();
 	if (unit != nullptr) {
 		unitId = unit->GetId();
@@ -51,6 +52,16 @@ CDecisionRecord::SOption& CDecisionRecord::Option(std::string label)
 	return options.back();
 }
 
+CDecisionRecord::SOption* CDecisionRecord::RejectedOption(std::string label, const char* reason)
+{
+	if ((rejectedOptions >= MAX_REJECTED_OPTIONS) || (options.size() >= MAX_OPTIONS)) {
+		Reject(reason);
+		return nullptr;
+	}
+	++rejectedOptions;
+	return &Option(std::move(label)).Reject(reason);
+}
+
 std::string BrainTaskLabel(const IUnitTask* task)
 {
 	static const char* const typeNames[] = {"none", "player", "idle", "wait", "retreat", "builder", "factory", "fighter"};
@@ -63,18 +74,21 @@ std::string BrainTaskLabel(const IUnitTask* task)
 	const int type = static_cast<int>(task->GetType());
 	std::string result = typeNames[(type >= 0 && type < 8) ? type : 0];
 	if (auto* bt = dynamic_cast<const IBuilderTask*>(task)) {
+		static const std::vector<std::string> buildNames = [] {
+			std::vector<std::string> names(static_cast<size_t>(IBuilderTask::BuildType::WAIT) + 1);
+			for (const auto& kv : IBuilderTask::GetBuildNames()) {
+				const size_t idx = static_cast<size_t>(kv.second);
+				if (idx < names.size()) {
+					names[idx] = kv.first;
+				}
+			}
+			return names;
+		}();
+		const size_t idx = static_cast<size_t>(bt->GetBuildType());
 		if (dynamic_cast<const CRecruitTask*>(task) != nullptr) {
 			result = "recruit";
-		}
-		for (const auto& kv : IBuilderTask::GetBuildNames()) {
-			if (kv.second == bt->GetBuildType()) {
-				result = kv.first;
-				break;
-			}
-		}
-		if (bt->GetBuildDef() != nullptr) {
-			result += ' ';
-			result += bt->GetBuildDef()->GetDef()->GetName();
+		} else if ((idx < buildNames.size()) && !buildNames[idx].empty()) {
+			result = buildNames[idx];
 		}
 	} else if (auto* ft = dynamic_cast<const IFighterTask*>(task)) {
 		const int fight = static_cast<int>(ft->GetFightType());
@@ -87,6 +101,11 @@ void CDecisionRecord::ResultTask(const IUnitTask* task)
 {
 	result = BrainTaskLabel(task);
 	resultTask = (task != nullptr) ? BrainTaskId(task) : 0;
+	auto* bt = dynamic_cast<const IBuilderTask*>(task);
+	if ((bt != nullptr) && (bt->GetBuildDef() != nullptr)) {
+		result += ' ';
+		result += bt->GetBuildDef()->GetDef()->GetName();
+	}
 }
 
 std::string CDecisionRecord::Serialize() const
@@ -163,9 +182,14 @@ std::string CDecisionRecord::Serialize() const
 CTraceScope::CTraceScope(CCircuitAI* circuit, const char* kind, CCircuitUnit* unit)
 {
 	CBrainServer* server = circuit->GetBrain();
-	if ((server == nullptr) || (server->GetActiveTrace() != nullptr)
-		|| !server->TryStartTrace(circuit->GetLastFrame()))
-	{
+	if (server == nullptr) {
+		return;
+	}
+	if (server->GetActiveTrace() != nullptr) {
+		server->NoteSuppressedTrace();
+		return;
+	}
+	if (!server->TryStartTrace(circuit->GetLastFrame(), kind)) {
 		return;
 	}
 	brain = server;

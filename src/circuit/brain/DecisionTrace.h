@@ -61,7 +61,11 @@ public:
 
 	void Step(const char* node, const char* outcome) { path.emplace_back(node, outcome); }
 	template<typename T> void Input(const char* key, T v) { inputs.Field(key, v); }
+	// Options live in storage reserved up front, so returned references stay valid
 	SOption& Option(std::string label);
+	// A ruled-out option worth showing (e.g. on the map). Capped separately so
+	// rejections never crowd out scored options; past the cap only counts.
+	SOption* RejectedOption(std::string label, const char* reason);
 	void Reject(const char* reason) { ++rejected[reason]; }
 	// Picks the option added last; no-op if it overflowed MAX_OPTIONS
 	void ChooseLast() { chosen = lastOverflowed ? -1 : static_cast<int>(options.size()) - 1; }
@@ -75,6 +79,7 @@ public:
 
 private:
 	static constexpr size_t MAX_OPTIONS = 64;
+	static constexpr int MAX_REJECTED_OPTIONS = 16;
 
 	const char* kind;
 	int frame;
@@ -88,6 +93,7 @@ private:
 	SOption overflow;  // receives options past MAX_OPTIONS
 	bool lastOverflowed = false;
 	int omitted = 0;
+	int rejectedOptions = 0;
 	std::map<std::string, int> rejected;
 	int chosen = -1;
 	std::string result;
@@ -113,7 +119,7 @@ private:
 // Stable id for a task, matching the ids in brain state snapshots
 uint64_t BrainTaskId(const void* task);
 
-// Short label for a candidate task, e.g. "mex armmex"
+// Short label for a task kind, e.g. "mex", "recruit" or "fight raid"
 std::string BrainTaskLabel(const IUnitTask* task);
 
 } // namespace circuit

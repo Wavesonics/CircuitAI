@@ -34,6 +34,8 @@ Sent once on connect and on request. Static for the whole game.
 ### `state`
 Sent every `stateEvery` frames (default 30, one per second at normal speed).
 - `frame`
+- `droppedDecisions`: decisions not traced since the last state, because of
+  the rate limit or because they happened inside another traced decision
 - `basePos`, `startPos`, `enemyPos` (mean known enemy position)
 - `eco`: `{mInc, eInc, mCur, mStore, mPull, eCur, eStore, ecoFactor, excessed,
   metalEmpty, metalFull, energyStalling, energyEmpty, energyFull}`
@@ -57,11 +59,31 @@ Sent every `stateEvery` frames (default 30, one per second at normal speed).
   - `inflEnemy`, `inflAlly`, `inflAllyDefend`, `influence` (ally minus enemy)
 - `openSpots`: string of `0`/`1` per metal spot, `1` meaning free to claim
 
+### `decision`
+Sent as the AI makes a traced decision, at most 40 per kind per second of
+game time (excess is counted in `state.droppedDecisions`).
+- `kind`: `factory`, `builder`, `attackTarget` or `retreat`
+- `frame`; `unit`, `unitDef`, `pos` when a unit is deciding
+- `path`: `[[node, outcome]...]`, the branches taken in order
+- `inputs`: object of named values the decision used
+- `options`: up to 64 of `{label, def?, score?, pos?, task?, reject?,
+  parts?}`. `parts` holds the score's components. Options with `reject` were
+  ruled out; scored options without it competed. `omitted` counts options past
+  the cap.
+- `rejected`: `{reason: count}` for candidates ruled out without an option
+- `chosen`: index into `options`, or -1
+- `result`: what the decision produced, e.g. `recruit armpw`, `wait`,
+  `attack enemy 123`; `resultTask` is that task's id when there is one
+
+Score direction depends on the kind: `factory` options are weights for a
+random roll (higher is likelier); `builder` and `attackTarget` pick the lowest.
+
 ### `error`
 `{t, error}` in reply to a malformed or unknown client message.
 
 ## Client to AI
 
-- `{"t":"cfg","stateEvery":N}`: set the state interval in frames (1..1800).
-  Applies to all clients of that AI.
+- `{"t":"cfg","stateEvery":N,"decisions":bool}`: set the state interval in
+  frames (1..1800) and turn decision tracing on or off. Either field may be
+  omitted. Applies to all clients of that AI.
 - `{"t":"meta"}`: resend `meta`.

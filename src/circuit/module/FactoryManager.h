@@ -16,6 +16,8 @@
 
 namespace circuit {
 
+class CDecisionRecord;
+
 class CEconomyManager;
 class CFactoryData;
 class CSRepairTask;
@@ -299,7 +301,8 @@ private:
 		CCircuitDef::Id id;
 		CRecruitTask::Priority priority;
 	};
-	SRecruitDef RequiredFireDef(CCircuitUnit* builder, bool isActive);
+	// trace: the caller's decision record, which differs from ours when a slave AI asks its leader
+	SRecruitDef RequiredFireDef(CCircuitUnit* builder, bool isActive, CDecisionRecord* trace = nullptr);
 
 	const std::vector<float>& GetFacTierProbs(const SFactoryDef& facDef) const;
 	CCircuitDef* GetFacRoleDef(CCircuitDef::RoleT role, const SFactoryDef& facDef) const;

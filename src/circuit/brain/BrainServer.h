@@ -12,6 +12,7 @@
 #ifndef SRC_CIRCUIT_BRAIN_BRAINSERVER_H_
 #define SRC_CIRCUIT_BRAIN_BRAINSERVER_H_
 
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -40,8 +41,10 @@ public:
 	// Decision tracing. At most one record is active at a time; nested
 	// decisions fold into the outer one.
 	CDecisionRecord* GetActiveTrace() const { return activeTrace; }
-	// Spends rate budget; false when nobody listens or the budget is used up
-	bool TryStartTrace(int frame);
+	// Spends this kind's rate budget; false when nobody listens or it is used up
+	bool TryStartTrace(int frame, const char* kind);
+	// A decision made while another was being traced; folded into the outer one
+	void NoteSuppressedTrace() { ++droppedTraces; }
 	void SetActiveTrace(CDecisionRecord* record) { activeTrace = record; }
 	void EndTrace(const CDecisionRecord* record);
 
@@ -87,7 +90,9 @@ private:
 
 	bool isTracing = true;
 	CDecisionRecord* activeTrace = nullptr;
-	int traceBudget;  // decisions left in the current one-second window
+	// Decisions spent per kind in the current one-second window. Per kind so
+	// frequent builder decisions cannot starve rare ones like retreats.
+	std::map<std::string, int> traceSpent;
 	int traceWindowFrame = -1;
 	int droppedTraces = 0;  // since the last state, reported there
 };

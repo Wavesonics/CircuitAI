@@ -37,7 +37,7 @@ constexpr int DEFAULT_STATE_INTERVAL = FRAMES_PER_SEC;
 constexpr int MIN_STATE_INTERVAL = 1;
 constexpr int MAX_STATE_INTERVAL = FRAMES_PER_SEC * 60;
 constexpr size_t MAX_CLIENTS = 8;
-constexpr int DEFAULT_TRACE_BUDGET = 120;  // decisions per second of game time
+constexpr int TRACE_BUDGET_PER_KIND = 40;  // decisions per kind per second of game time
 constexpr size_t MAX_LINE = 64 * 1024;
 // Inbound bytes drained per client per frame, so a chatty client cannot stall the sim
 constexpr size_t MAX_READ_PER_UPDATE = 256 * 1024;
@@ -138,7 +138,6 @@ CBrainServer::CBrainServer(CCircuitAI* circuit, int listenFd, int port)
 	, port(port)
 	, stateInterval(DEFAULT_STATE_INTERVAL)
 	, lastStateFrame(-1)
-	, traceBudget(DEFAULT_TRACE_BUDGET)
 {
 }
 
@@ -176,20 +175,21 @@ void CBrainServer::Update(int frame)
 	}
 }
 
-bool CBrainServer::TryStartTrace(int frame)
+bool CBrainServer::TryStartTrace(int frame, const char* kind)
 {
 	if (!isTracing || clients.empty()) {
 		return false;
 	}
 	if ((traceWindowFrame < 0) || (frame - traceWindowFrame >= FRAMES_PER_SEC)) {
 		traceWindowFrame = frame;
-		traceBudget = DEFAULT_TRACE_BUDGET;
+		traceSpent.clear();
 	}
-	if (traceBudget <= 0) {
+	int& spent = traceSpent[kind];
+	if (spent >= TRACE_BUDGET_PER_KIND) {
 		++droppedTraces;
 		return false;
 	}
-	--traceBudget;
+	++spent;
 	return true;
 }
 

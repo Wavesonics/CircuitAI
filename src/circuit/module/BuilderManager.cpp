@@ -1303,6 +1303,17 @@ IBuilderTask* CBuilderManager::MakeCommTask(CCircuitUnit* unit, const CQueryCost
 	return const_cast<IBuilderTask*>(task);
 }
 
+static void TraceRejectedJob(CDecisionRecord* trace, const IBuilderTask* candidate, const AIFloat3& pos, const char* reason)
+{
+	CDecisionRecord::SOption* opt = trace->RejectedOption(BrainTaskLabel(candidate), reason);
+	if (opt != nullptr) {
+		opt->Pos(pos).Task(BrainTaskId(candidate));
+		if (candidate->GetBuildDef() != nullptr) {
+			opt->Def(candidate->GetBuildDef()->GetId());
+		}
+	}
+}
+
 IBuilderTask* CBuilderManager::MakeBuilderTask(CCircuitUnit* unit, const CQueryCostMap* query)
 {
 	CThreatMap* threatMap = circuit->GetThreatMap();
@@ -1390,10 +1401,7 @@ IBuilderTask* CBuilderManager::MakeBuilderTask(CCircuitUnit* unit, const CQueryC
 					continue;
 				}
 				if ((buildThreat < THREAT_MIN) && checkThreat(buildPos) && (inflMap->GetInfluenceAt(buildPos) < -INFL_EPS)) {  // safety check
-					if (trace) {
-						trace->Option(BrainTaskLabel(candidate)).Pos(buildPos).Task(BrainTaskId(candidate))
-							.Reject("too dangerous");
-					}
+					if (trace) { TraceRejectedJob(trace, candidate, buildPos, "too dangerous"); }
 					continue;
 				}
 			}
@@ -1406,10 +1414,7 @@ IBuilderTask* CBuilderManager::MakeBuilderTask(CCircuitUnit* unit, const CQueryC
 			} else {
 				distCost = query->GetCostAt(buildPos, buildDistance);
 				if (distCost < 0.f) {  // path blocked by buildings or threat too high
-					if (trace) {
-						trace->Option(BrainTaskLabel(candidate)).Pos(buildPos).Task(BrainTaskId(candidate))
-							.Reject("path blocked or threatened");
-					}
+					if (trace) { TraceRejectedJob(trace, candidate, buildPos, "path blocked or threatened"); }
 					continue;
 				}
 			}
