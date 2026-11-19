@@ -19,6 +19,7 @@
 #include "setup/SetupManager.h"
 #include "spring/SpringMap.h"
 #include "task/builder/BuilderTask.h"
+#include "task/fighter/DefendTask.h"
 #include "task/fighter/FighterTask.h"
 #include "task/fighter/SquadTask.h"
 #include "task/static/RecruitTask.h"
@@ -353,6 +354,11 @@ void CBrainServer::WriteTasks(CJsonOut& js) const
 				if (sq->GetLeader() != nullptr) {
 					js.Field("leader", sq->GetLeader()->GetId());
 				}
+			}
+			if (auto* dt = dynamic_cast<CDefendTask*>(task)) {
+				// A gathering squad: becomes a `promote` squad at `promoteAt` power
+				js.Field("promote", static_cast<int>(dt->GetPromote()));
+				js.Field("promoteAt", dt->GetPromotePower());
 			}
 		}
 		js.EndObj();

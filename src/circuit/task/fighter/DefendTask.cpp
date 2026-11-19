@@ -97,6 +97,17 @@ void CDefendTask::Start(CCircuitUnit* unit)
 	)
 }
 
+float CDefendTask::GetPromotePower() const
+{
+	const CMilitaryManager* militaryMgr = static_cast<const CMilitaryManager*>(manager);
+	const CMilitaryManager::SFocus& focus = militaryMgr->GetFocus();
+	if ((promote != FightType::ATTACK) || !focus.isActive) {
+		return maxPower;
+	}
+	const float threat = focus.isForce ? 0.f : militaryMgr->GetFocusThreat();
+	return std::max(militaryMgr->GetMinAttackers(), threat) * powerMod;
+}
+
 void CDefendTask::Update()
 {
 	++updCount;
@@ -106,7 +117,7 @@ void CDefendTask::Update()
 	 */
 	if (updCount % 32 == 1) {
 		CMilitaryManager* militaryMgr = static_cast<CMilitaryManager*>(manager);
-		if ((attackPower >= maxPower) || !militaryMgr->GetTasks(check).empty()) {
+		if ((attackPower >= GetPromotePower()) || !militaryMgr->GetTasks(check).empty()) {
 			IFighterTask* task = militaryMgr->Enqueue(TaskF::Common(promote));
 			decltype(units) tmpUnits = units;
 			for (CCircuitUnit* unit : tmpUnits) {

@@ -43,7 +43,9 @@ Sent every `stateEvery` frames (default 30, one per second at normal speed).
 - `tasks`: objects with
   - always: `id, type, prio, state, n` (assignee count)
   - builder: `build, pos, def?, costM, progressM, recruit?`
-  - fighter: `fight, pos, power, target?, targetPos?, leader?`
+  - fighter: `fight, pos, power, target?, targetPos?, leader?`; defend squads
+    also `promote` (fight type they turn into) and `promoteAt` (power at which
+    they do, lowered or raised by an attack focus)
 - `enemies`: `[id, defId, x, z, losBits, cost]`. `id` is -1 for fake enemies
   (inferred from damage), `defId` is -1 when only seen on radar. `losBits`:
   `1` LOS, `2` radar, `4` hidden, `8` neutral/ignored, `32` dying, `64` dead.
@@ -130,10 +132,17 @@ Reply to every `cmd`: `{t, id?, op, ok, error?, result, control}`.
     them back to the AI and sends them to retreat. Structures are skipped for
     move, fight and retreat. Result: `{applied: [ids]}`.
   - `focus` `{x, z, radius?, force?, seconds?}` or `{clear: true}`: for
-    `seconds` (default 300, at most 3600), attack squads only pick enemies
-    within `radius` (default 1000) of the point, nearest to it first, and
-    travel there when none are around. `force` also ignores the
-    squad-strength check. Defending squads are not affected.
+    `seconds` (default 300, at most 3600):
+    - gathering squads turn into attack squads once they out-power the
+      strongest enemy group inside the focus, rather than the strongest one
+      anywhere (`quota.attack` is still the floor);
+    - attack squads only pick enemies within `radius` (default 1000) of the
+      point, nearest to it first, judging each group at full strength;
+    - with no target there, they travel to the point if they out-power what is
+      in it.
+    `force` skips the strength checks, so `quota.attack` alone decides when
+    squads attack. Raids, scouts and squads that stay defending are not
+    affected.
 
 Tuning changes apply from the AI's next decision. Nothing persists between
 games.

@@ -269,6 +269,7 @@ void CAttackTask::FindTarget()
 	const CMilitaryManager::SFocus& focus = circuit->GetMilitaryManager()->GetFocus();
 	if (trace && focus.isActive) {
 		trace->Step("attack focus set", focus.isForce ? "yes, forced" : "yes");
+		trace->Input("focusThreat", circuit->GetMilitaryManager()->GetFocusThreat());
 	}
 	const std::vector<CEnemyManager::SEnemyGroup>& groups = circuit->GetEnemyManager()->GetEnemyGroups();
 	for (unsigned i = 0; i < groups.size(); ++i) {
@@ -290,8 +291,12 @@ void CAttackTask::FindTarget()
 			if (opt) { opt->Reject("too weak to bother, better target found"); }
 			continue;
 		}
+		// The distance scale shrinks enemy strength far from our base, which suits
+		// the AI's own roaming but would send a lone unit into a focused base, so
+		// inside a focus groups are judged at full strength
+		const float strength = focus.isActive ? group.influence : group.influence * scale;
 		if (!(focus.isActive && focus.isForce)
-			&& (maxPower <= group.influence * scale) && (inflMap->GetInfluenceAt(group.pos) < INFL_SAFE))
+			&& (maxPower <= strength) && (inflMap->GetInfluenceAt(group.pos) < INFL_SAFE))
 		{
 			if (opt) { opt->Reject("too strong for this squad"); }
 			continue;
@@ -389,11 +394,12 @@ void CAttackTask::ApplyTargetPath(const CQueryPathSingle* query)
 void CAttackTask::FallbackFrontPos()
 {
 	CCircuitAI* circuit = manager->GetCircuit();
-	const CMilitaryManager::SFocus& focus = circuit->GetMilitaryManager()->GetFocus();
-	if (focus.isActive) {
+	CMilitaryManager* militaryMgr = circuit->GetMilitaryManager();
+	const CMilitaryManager::SFocus& focus = militaryMgr->GetFocus();
+	if (focus.isActive && (focus.isForce || (attackPower * powerMod > militaryMgr->GetFocusThreat()))) {
 		urgentPositions = {focus.pos};
 	} else {
-		circuit->GetMilitaryManager()->FillFrontPos(leader, urgentPositions);
+		militaryMgr->FillFrontPos(leader, urgentPositions);
 	}
 	if (urgentPositions.empty()) {
 		FallbackBasePos();

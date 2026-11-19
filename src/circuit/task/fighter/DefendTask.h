@@ -30,6 +30,9 @@ public:
 //	void SetWantedTarget(CEnemyInfo* enemy) { SetTarget(enemy); }
 
 	FightType GetPromote() const { return promote; }
+	// Power at which the squad promotes; lower or higher than maxPower while
+	// an attack focus is set (see CMilitaryManager::SFocus)
+	float GetPromotePower() const;
 
 protected:
 	float GetMaxPower() const { return maxPower; }

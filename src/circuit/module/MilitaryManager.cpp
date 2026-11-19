@@ -1194,6 +1194,21 @@ void CMilitaryManager::FillSafePos(CCircuitUnit* unit, F3Vec& outPositions)
 	}
 }
 
+float CMilitaryManager::GetFocusThreat() const
+{
+	if (!focus.isActive) {
+		return 0.f;
+	}
+	float threat = 0.f;
+	const float sqRadius = SQUARE(focus.radius);
+	for (const CEnemyManager::SEnemyGroup& group : circuit->GetEnemyManager()->GetEnemyGroups()) {
+		if (!group.units.empty() && (group.pos.SqDistance2D(focus.pos) <= sqRadius)) {
+			threat = std::max(threat, group.influence);
+		}
+	}
+	return threat;
+}
+
 CCircuitUnit* CMilitaryManager::GetClosestLeader(const std::vector<IFighterTask::FightType>& types, const AIFloat3& position)
 {
 	IFighterTask* task = nullptr;

@@ -176,9 +176,12 @@ public:
 	}
 	CCircuitDef::RoleT GetRoleCount() const { return roleInfos.size(); }
 
-	// Attack focus set from outside the AI: attack squads only pick enemies
-	// within radius of pos (nearest to pos first) and travel to pos when none
-	// are there. isForce also ignores the squad-strength check.
+	// Attack focus set from outside the AI. While active, gathering squads
+	// promote to attack once they out-power the strongest enemy group inside
+	// the focus (not the strongest anywhere), attack squads only pick enemies
+	// within radius of pos, nearest to it first, and travel to pos when it is
+	// empty and they out-power what is there. isForce skips the strength checks
+	// (quota.attack alone gates promotion).
 	struct SFocus {
 		springai::AIFloat3 pos;
 		float radius = 0.f;
@@ -186,6 +189,8 @@ public:
 		bool isActive = false;
 	};
 	const SFocus& GetFocus() const { return focus; }
+	// Strength (influence) of the strongest enemy group inside the focus, 0 if none
+	float GetFocusThreat() const;
 	void SetFocus(const springai::AIFloat3& pos, float radius, bool isForce) { focus = {pos, radius, isForce, true}; }
 	void ClearFocus() { focus.isActive = false; }
 
