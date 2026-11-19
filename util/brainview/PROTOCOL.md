@@ -26,7 +26,7 @@ Sent once on connect and on request. Static for the whole game.
 - `threatGrid`, `inflGrid`: `{w, h, cell}` dimensions of the layers in `state`
 - `roles`, `buildTypes`, `fightTypes`, `taskTypes`: name tables indexed by the
   numeric ids used in `state`
-- `defs`: `[id, name, mainRole, metalCost]`
+- `defs`: `[id, name, mainRole, metalCost, isMobile]`
 - `metalSpots`: `[x, z, income]`
 - `clusters`: `[x, z, radius, income, [spotIndex...]]`
 - `clusterEdges`: `[clusterA, clusterB]`

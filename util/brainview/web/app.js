@@ -184,7 +184,7 @@ async function loadMeta() {
   } catch {
     return;
   }
-  S.defs = new Map(S.meta.defs.map(([id, name, role, cost]) => [id, { name, role, cost }]));
+  S.defs = new Map(S.meta.defs.map(([id, name, role, cost, mobile]) => [id, { name, role, cost, mobile }]));
   Control.fillDefNames();
   S.terrain = buildTerrain(S.meta.heights);
   S.view = null;

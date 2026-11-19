@@ -179,7 +179,7 @@ const std::string& CBrainServer::GetMeta()
 	}
 	js.EndArr();
 
-	// [id, name, mainRole, metalCost]
+	// [id, name, mainRole, metalCost, isMobile]
 	js.Key("defs").BeginArr();
 	for (CCircuitDef& cdef : circuit->GetCircuitDefs()) {
 		js.BeginArr()
@@ -187,6 +187,7 @@ const std::string& CBrainServer::GetMeta()
 			.Val(cdef.GetDef()->GetName())
 			.Val(static_cast<int>(cdef.GetMainRole()))
 			.Val(cdef.GetCostM())
+			.Val(cdef.IsMobile())
 		.EndArr();
 	}
 	js.EndArr();

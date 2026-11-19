@@ -5,6 +5,9 @@
 const Control = (() => {
   const LOG_MAX = 60;
   const DRAG_PX = 4; // movement below this is a click, not a drag
+  const ACK_TIMEOUT_MS = 10000;
+  // Acks reach every client of an AI, so ids carry a per-page prefix
+  const SESSION = Math.random().toString(36).slice(2, 8);
 
   const C = {
     control: null, // control state from the latest state or ack
@@ -37,9 +40,10 @@ const Control = (() => {
 
   async function send(op, args = {}, summary = op) {
     if (S.port == null) return;
-    const id = C.nextId++;
+    const id = `${SESSION}-${C.nextId++}`;
     C.pending.set(id, summary);
     log(`${summary}…`, "pending", id);
+    setTimeout(() => { if (C.pending.has(id)) settle(id, false, "no reply from the AI"); }, ACK_TIMEOUT_MS);
     try {
       const res = await fetch(`/api/send?port=${S.port}`, {
         method: "POST",
@@ -58,7 +62,7 @@ const Control = (() => {
       return;
     }
     if (a.control) applyControl(a.control);
-    if (typeof a.id === "number" && C.pending.has(a.id)) {
+    if (C.pending.has(a.id)) {
       settle(a.id, a.ok, a.error);
     }
   }
@@ -96,9 +100,11 @@ const Control = (() => {
     renderFocus();
   }
 
+  // A new AI tab or match: nothing from the previous one applies
   function reset() {
-    Object.assign(C, { control: null, mode: null, box: null });
+    Object.assign(C, { control: null, mode: null, box: null, log: [] });
     C.selected.clear();
+    C.pending.clear();
     renderAll();
   }
 
@@ -328,7 +334,11 @@ const Control = (() => {
       if (S.view) openMenu(e);
     });
     canvas.addEventListener("mousedown", (e) => {
-      closeMenu();
+      // A click that only dismisses the menu must not also change the selection
+      if (!$("ctxmenu").hidden) {
+        closeMenu();
+        return;
+      }
       if (e.button !== 0) return;
       C.press = { x: e.offsetX, y: e.offsetY, shift: e.shiftKey };
     });
@@ -396,7 +406,7 @@ const Control = (() => {
   }
 
   function isStructure(def) {
-    return !def || (def.role != null && S.meta.roles[def.role] === "static");
+    return !def || !def.mobile;
   }
 
   function drawOverlay(ctx, px) {
