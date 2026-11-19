@@ -700,10 +700,13 @@ tool("order_units",
       "to_sector": {"type": "string", "description": "destination sector, instead of x and z"},
       "seconds": {"type": "integer"}}, ("action",))(Server.t_order_units)
 tool("set_focus",
-     "Point the AI's attack squads at an area. They only take targets within radius of it (nearest to it "
-     "first) and travel there when it is empty, still using their own tactics; force also makes them "
-     "attack even when outmatched. Lapses after seconds (default 300, max 3600). Defending squads and "
-     "raids are unaffected.",
+     "Point the AI's army at an area. While set, gathering squads go on the attack as soon as they "
+     "out-power the strongest enemy group inside the area (quota.attack is the floor), attack squads only "
+     "take targets within radius of it (nearest to it first), and with nothing to shoot they travel there "
+     "if they out-power what is in it. Without force the AI still refuses fights it would lose, so a focus "
+     "on a strong position may move nothing until the army is big enough (check promoteAt in get_overview "
+     "squads); force skips the strength checks. Lapses after seconds (default 300, max 3600). Raids and "
+     "scouts are unaffected.",
      {**WHERE, "radius": {"type": "number", "description": "default 1000 elmos"},
       "force": {"type": "boolean"}, "seconds": {"type": "integer"}})(Server.t_set_focus)
 tool("clear_focus", "Let attack squads choose their own targets again.")(Server.t_clear_focus)

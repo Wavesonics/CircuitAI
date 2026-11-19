@@ -191,7 +191,10 @@ public:
 	const SFocus& GetFocus() const { return focus; }
 	// Strength (influence) of the strongest enemy group inside the focus, 0 if none
 	float GetFocusThreat() const;
-	void SetFocus(const springai::AIFloat3& pos, float radius, bool isForce) { focus = {pos, radius, isForce, true}; }
+	void SetFocus(const springai::AIFloat3& pos, float radius, bool isForce) {
+		focus = {pos, radius, isForce, true};
+		focusThreatFrame = -1;  // the area changed within this frame
+	}
 	void ClearFocus() { focus.isActive = false; }
 
 	CCircuitDef* GetBigGunDef() const { return bigGunDef; }
@@ -280,6 +283,9 @@ private:
 	unsigned int maxScouts = 0;
 	float minAttackers = 0.f;
 	SFocus focus;
+	// GetFocusThreat is asked by every squad; groups change once per frame at most
+	mutable int focusThreatFrame = -1;
+	mutable float focusThreat = 0.f;
 	struct SThreatQuota {
 		float min;
 		float len;

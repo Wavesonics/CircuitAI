@@ -47,8 +47,10 @@ The Control tab sends commands to the AI (see `cmd` in PROTOCOL.md):
   fight-move or move them there. Ordered units leave the AI's control for the
   "hold for" time (amber rings), then return to it. Stop, Retreat and
   "Give back to AI" act on the selection.
-- Attack focus: attack squads only go after enemies inside the circle and
-  travel there when it is empty. It lapses after the set time.
+- Attack focus: squads go on the attack once they out-power the strongest
+  enemy group inside the circle, only target enemies inside it, and move there
+  when it is empty and they can win. "Ignore squad strength" skips those
+  checks. It lapses after the set time.
 - Production: queue units at a factory, place a structure, or cap or ban a
   unit type.
 - Tuning: production and army quotas, and per-role army composition. Changed

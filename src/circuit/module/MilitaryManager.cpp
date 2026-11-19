@@ -1199,6 +1199,10 @@ float CMilitaryManager::GetFocusThreat() const
 	if (!focus.isActive) {
 		return 0.f;
 	}
+	const int frame = circuit->GetLastFrame();
+	if (focusThreatFrame == frame) {
+		return focusThreat;
+	}
 	float threat = 0.f;
 	const float sqRadius = SQUARE(focus.radius);
 	for (const CEnemyManager::SEnemyGroup& group : circuit->GetEnemyManager()->GetEnemyGroups()) {
@@ -1206,6 +1210,8 @@ float CMilitaryManager::GetFocusThreat() const
 			threat = std::max(threat, group.influence);
 		}
 	}
+	focusThreatFrame = frame;
+	focusThreat = threat;
 	return threat;
 }
 
