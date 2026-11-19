@@ -122,7 +122,7 @@ void CBrainServer::EmitKeyDeath(int frame, const SDeath& d)
 				: (d.weaponDefId < -1) ? SpecialDamageName(d.weaponDefId) : "")
 		.Field("commandersLeft", d.commandersLeft);
 	js.EndObj();
-	Emit(js.Take());
+	Emit(js.Take(), cat == KC_COMMANDER);
 
 	if ((cat != KC_COMMANDER) || (d.commandersLeft != 0) || !commanderlessTeams.insert(d.team).second) {
 		return;
@@ -133,7 +133,7 @@ void CBrainServer::EmitKeyDeath(int frame, const SDeath& d)
 		.Field("side", d.side).Field("team", d.team).Field("allyTeam", d.allyTeam)
 		.Field("reason", "last commander died");
 	te.EndObj();
-	Emit(te.Take());
+	Emit(te.Take(), true);
 }
 
 void CBrainServer::OnEnemyDestroyed(CEnemyInfo* enemy, int attackerId)
@@ -177,7 +177,10 @@ void CBrainServer::PollAllyKeyUnits(int frame)
 		now[kv.first] = SAllyKeyUnit{u->GetCircuitDef()->GetId(), team, pos.x, pos.z};
 	}
 	for (const auto& kv : allyKeyUnits) {
-		if (now.find(kv.first) != now.end()) {
+		// Gone from the allied list but given to us or captured by a visible enemy
+		if ((now.find(kv.first) != now.end()) || (circuit->GetTeamUnit(kv.first) != nullptr)
+			|| (circuit->GetEnemyInfo(kv.first) != nullptr))
+		{
 			continue;
 		}
 		const SAllyKeyUnit& k = kv.second;

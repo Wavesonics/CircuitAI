@@ -48,13 +48,19 @@ inline void WritePos(CJsonOut& js, float x, float z)
 	js.BeginArr().Val(std::round(x)).Val(std::round(z)).EndArr();
 }
 
-// [[key, count]...], largest count first
-inline void WriteCounts(CJsonOut& js, const std::map<int, int>& counts)
+// Largest count first
+inline std::vector<std::pair<int, int>> SortedCounts(const std::map<int, int>& counts)
 {
 	std::vector<std::pair<int, int>> sorted(counts.begin(), counts.end());
 	std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+	return sorted;
+}
+
+// [[key, count]...], largest count first
+inline void WriteCounts(CJsonOut& js, const std::map<int, int>& counts)
+{
 	js.BeginArr();
-	for (const auto& kv : sorted) {
+	for (const auto& kv : SortedCounts(counts)) {
 		js.BeginArr().Val(kv.first).Val(kv.second).EndArr();
 	}
 	js.EndArr();

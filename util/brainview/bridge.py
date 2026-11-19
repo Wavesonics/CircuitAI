@@ -62,7 +62,7 @@ class AILink:
             # Late joiners get the current picture first
             if self.state is not None:
                 q.put_nowait(("state", self.state))
-            for kind, lines in (("event", self.events), ("decision", self.decisions)):
+            for kind, lines in (("decision", self.decisions), ("event", self.events)):
                 for line in lines:
                     if q.full():
                         break
@@ -166,10 +166,12 @@ class AILink:
                 self._publish("decision", line)
             elif kind == "event":
                 # The AI replays its recent events to each new connection
+                event = json.loads(line)
+                is_key = (event.get("kind") == "teamEliminated"
+                          or event.get("kind") == "keyDeath" and event.get("category") == "commander")
                 with self.lock:
                     self.events.append(line)
-                    if ('"kind":"keyDeath"' in line and '"category":"commander"' in line
-                            or '"kind":"teamEliminated"' in line):
+                    if is_key:
                         self.key_events.append(line)
                 self._publish("event", line)
             elif kind in ("ack", "error"):

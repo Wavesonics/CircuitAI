@@ -440,9 +440,7 @@ void CBrainServer::CloseLossBurst(const SLossBurst& lb)
 	js.Key("units"); WriteCounts(js, lb.byDef);
 	js.Key("attackers"); WriteCounts(js, lb.byAttacker);
 	js.Key("weapons").BeginArr();
-	std::vector<std::pair<int, int>> weapons(lb.byWeapon.begin(), lb.byWeapon.end());
-	std::sort(weapons.begin(), weapons.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
-	for (const auto& kv : weapons) {
+	for (const auto& kv : SortedCounts(lb.byWeapon)) {
 		const char* name = circuit->IsValidWeaponDefId(kv.first)
 				? circuit->GetWeaponDef(kv.first)->GetDef()->GetName()
 				: SpecialDamageName(kv.first);

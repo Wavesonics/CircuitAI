@@ -156,7 +156,8 @@ private:
 	void PollSilos(int frame);
 	void CloseBlast(const SBlast& blast);
 	void CloseLossBurst(const SLossBurst& burst);
-	void Emit(std::string&& line);
+	// keepAllGame: replayed to new clients for the whole game, not just while recent
+	void Emit(std::string&& line, bool keepAllGame = false);
 
 	// BrainAlerts.cpp
 	enum KeyCategory: uint8_t {KC_NONE = 0, KC_COMMANDER, KC_EXPERIMENTAL, KC_FACTORY, KC_SUPER, KC_DEFENCE,

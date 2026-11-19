@@ -31,6 +31,7 @@ SECTOR_COLS = 8  # map is cut into SECTOR_COLS columns of square sectors
 ALERT_SECONDS = 180  # how far back get_overview's alerts reach
 ATTACK_ALERT_SECONDS = 60  # ... for under-attack reports, which are frequent
 DEF_NUKE, DEF_ANTI = 1, 2  # meta defs flags
+DEF_COMMANDER = 1  # meta defs category
 
 INSTRUCTIONS = """\
 Tools for watching and steering BARb, the Beyond All Reason AI, in a live game.
@@ -101,7 +102,8 @@ class Game:
         if "_defs" not in meta:
             meta["_defs"] = {d[0]: {"name": d[1], "role": meta["roles"][d[2]] if d[2] < len(meta["roles"]) else "?",
                                     "cost": d[3], "mobile": d[4] if len(d) > 4 else True,
-                                    "flags": d[5] if len(d) > 5 else 0} for d in meta["defs"]}
+                                    "flags": d[5] if len(d) > 5 else 0,
+                                    "category": d[6] if len(d) > 6 else 0} for d in meta["defs"]}
         return meta["_defs"]
 
     def def_name(self, def_id):
@@ -250,7 +252,8 @@ class Server:
             # Whole game: with deathmode "com" a commander death decides a team's fate
             "commanderDeaths": deaths or ("none seen" if "silos" in st
                                           else "not reported: this AI build predates brain protocol 2"),
-            "ourCommandersAlive": sum(1 for u in st["units"] if g.defs().get(u[1], {}).get("role") == "commander"),
+            "ourCommandersAlive": sum(1 for u in st["units"] if g.defs().get(u[1], {}).get("category") == DEF_COMMANDER)
+                                  if "silos" in st else "not reported: this AI build predates brain protocol 2",
             # Newest last; get_events has the details and older ones
             "alerts": (alerts if alerts else f"none in the last {ALERT_SECONDS // 60} minutes")
                       if "silos" in st else "not reported: this AI build predates brain protocol 2",

@@ -207,17 +207,13 @@ void CBrainServer::EndTrace(const CDecisionRecord* record)
 	}
 }
 
-void CBrainServer::Emit(std::string&& line)
+void CBrainServer::Emit(std::string&& line, bool keepAllGame)
 {
+	// Unlike states, events are never resent, so they go even to lagging clients
 	for (SClient& c : clients) {
-		if (c.Backlog() < STATE_SKIP_BACKLOG) {
-			Send(c, line);
-		}
+		Send(c, line);
 	}
-	const bool isCommanderDeath = (line.find(R"("kind":"keyDeath")") != std::string::npos)
-			&& (line.find(R"("category":"commander")") != std::string::npos);
-	if (isCommanderDeath || (line.find(R"("kind":"teamEliminated")") != std::string::npos))
-	{
+	if (keepAllGame) {
 		keyEvents.push_back(line);
 	}
 	recentEvents.push_back(std::move(line));
