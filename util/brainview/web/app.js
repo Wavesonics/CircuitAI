@@ -155,6 +155,8 @@ async function selectAI(port) {
   src.addEventListener("decision", (e) => onDecision(JSON.parse(e.data)));
   src.addEventListener("meta", () => { resetMatch(); loadMeta(); });
   src.addEventListener("status", (e) => setConnected(JSON.parse(e.data).connected));
+  src.addEventListener("ack", (e) => Control.onAck(JSON.parse(e.data)));
+  src.addEventListener("aierror", (e) => Control.onAck(JSON.parse(e.data)));
   src.onopen = () => {
     // Every (re)connect replays the recent decisions, so start from a clean list
     S.decisions = [];
@@ -169,6 +171,7 @@ async function selectAI(port) {
 function resetMatch() {
   Object.assign(S, { state: null, history: [], decisions: [], selected: null, layerImg: null });
   S.stateCache.clear();
+  Control.reset();
   closeDetail();
 }
 
@@ -182,6 +185,7 @@ async function loadMeta() {
     return;
   }
   S.defs = new Map(S.meta.defs.map(([id, name, role, cost]) => [id, { name, role, cost }]));
+  Control.fillDefNames();
   S.terrain = buildTerrain(S.meta.heights);
   S.view = null;
   draw();
@@ -206,6 +210,7 @@ function onState(st) {
   $("clock").textContent = clock(st.frame);
   renderEconomy();
   renderMilitary();
+  Control.onState(st);
   draw();
 }
 
@@ -372,6 +377,7 @@ function draw() {
     if (S.overlays.squads) drawSquads(ctx, px, st);
   }
   if (S.selected) drawDecision(ctx, px, S.selected);
+  Control.draw(ctx, px);
 }
 
 function dot(ctx, x, z, r, fill, stroke) {
@@ -879,6 +885,8 @@ function setupMapInput() {
     draw();
   }, { passive: false });
   canvas.addEventListener("mousedown", (e) => {
+    // Shift-drag selects and other buttons open menus; those belong to Control
+    if (e.button !== 0 || e.shiftKey) return;
     drag = { x: e.clientX, y: e.clientY };
     canvas.classList.add("dragging");
   });

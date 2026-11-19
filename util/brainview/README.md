@@ -10,6 +10,7 @@ A live view into BARb's world model and decisions while it plays.
   units, enemies, enemy groups, squad targets and build jobs, plus economy,
   army-by-role and a feed of decisions. Selecting a decision shows the branch
   path it took, its inputs, and every option with its score and score parts.
+  The Control tab changes what the AI does while it plays.
 
 ## Run
 
@@ -37,3 +38,20 @@ The bridge reconnects on its own, so it can be left running across matches.
   remembered positions, crosses are attackers inferred from damage.
 - Squares are build jobs (dashed when nobody is assigned), arrows are squad
   targets, red circles are the enemy groups the AI's attack logic scores.
+
+## Control
+
+The Control tab sends commands to the AI (see `cmd` in PROTOCOL.md):
+
+- Select units with a click, or shift-drag a box; right-click the map to
+  fight-move or move them there. Ordered units leave the AI's control for the
+  "hold for" time (amber rings), then return to it. Stop, Retreat and
+  "Give back to AI" act on the selection.
+- Attack focus: attack squads only go after enemies inside the circle and
+  travel there when it is empty. It lapses after the set time.
+- Production: queue units at a factory, place a structure, or cap or ban a
+  unit type.
+- Tuning: production and army quotas, and per-role army composition. Changed
+  values turn amber with a restore button; "Reset everything" undoes all
+  changes, the focus and unit control.
+- The command log shows each command and whether the AI accepted it.

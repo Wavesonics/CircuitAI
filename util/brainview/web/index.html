@@ -38,10 +38,18 @@
     </div>
     <div id="legend" class="legend"></div>
     <div id="tooltip" class="tooltip" hidden></div>
-    <div class="map-hint">Scroll to zoom, drag to pan, double-click to reset</div>
+    <div id="mode-bar" class="mode-bar" hidden></div>
+    <div id="ctxmenu" class="ctxmenu" hidden></div>
+    <div class="map-hint">Scroll to zoom, drag to pan, double-click to reset.
+      Click or shift-drag to select the AI's units, right-click for orders.</div>
   </section>
 
   <aside class="side">
+    <div class="side-tabs" role="tablist">
+      <button type="button" class="active" data-tab="watch" role="tab">Brain</button>
+      <button type="button" data-tab="control" role="tab">Control</button>
+    </div>
+    <div id="tab-watch" class="tab-body">
     <section class="card">
       <h2>Economy</h2>
       <div id="eco-stats" class="stats"></div>
@@ -68,6 +76,68 @@
       <div id="kind-filter" class="chips"></div>
       <ol id="feed" class="feed"></ol>
     </section>
+    </div>
+
+    <div id="tab-control" class="tab-body scroll" hidden>
+      <section class="card">
+        <h2>Selection <span class="feed-tools"><button type="button" id="sel-clear">Clear</button></span></h2>
+        <div id="sel-summary" class="muted-text">No units selected. Click a unit, or shift-drag a box, on the map.</div>
+        <div class="row">
+          <label>Hold for <input id="sel-seconds" type="number" min="1" max="1800" value="120"> s</label>
+        </div>
+        <div class="btns">
+          <button type="button" data-unit-action="stop">Stop</button>
+          <button type="button" data-unit-action="retreat">Retreat</button>
+          <button type="button" data-unit-action="release">Give back to AI</button>
+        </div>
+        <div class="muted-text">Right-click the map to move or fight-move the selection there.</div>
+      </section>
+
+      <section class="card">
+        <h2>Attack focus</h2>
+        <div id="focus-status" class="muted-text"></div>
+        <div class="row">
+          <label>Radius <input id="focus-radius" type="number" min="100" step="100" value="1000"></label>
+          <label>For <input id="focus-seconds" type="number" min="1" max="3600" value="300"> s</label>
+          <label><input id="focus-force" type="checkbox"> ignore squad strength</label>
+        </div>
+        <div class="btns">
+          <button type="button" id="focus-place">Place on map</button>
+          <button type="button" id="focus-clear">Clear</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Production</h2>
+        <datalist id="def-names"></datalist>
+        <div class="row">
+          <label class="grow">Unit <input id="recruit-def" list="def-names" placeholder="e.g. armflash"></label>
+          <label>× <input id="recruit-count" type="number" min="1" max="20" value="1"></label>
+          <button type="button" id="recruit-go">Queue</button>
+        </div>
+        <div class="row">
+          <label class="grow">Structure <input id="build-def" list="def-names" placeholder="e.g. armsolar"></label>
+          <button type="button" id="build-place">Place on map</button>
+        </div>
+        <div class="row">
+          <label class="grow">Limit <input id="limit-def" list="def-names" placeholder="unit to cap or ban"></label>
+          <label>max <input id="limit-value" type="number" min="0" value="0"></label>
+          <button type="button" id="limit-go">Apply</button>
+        </div>
+        <ul id="limits" class="plain"></ul>
+      </section>
+
+      <section class="card">
+        <h2>Tuning <span class="feed-tools"><button type="button" id="reset-all" class="danger">Reset everything</button></span></h2>
+        <div id="tuning"></div>
+        <label class="muted-text"><input id="roles-all" type="checkbox"> show roles with no units on either side</label>
+      </section>
+
+      <section class="card">
+        <h2>Command log</h2>
+        <ol id="cmd-log" class="cmd-log"></ol>
+      </section>
+    </div>
   </aside>
 </main>
 
@@ -92,6 +162,7 @@
   </div>
 </section>
 
+<script src="control.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

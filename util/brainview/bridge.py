@@ -8,7 +8,8 @@ state and recent decisions per AI, and serves the viewer:
   GET  /api/ais               connected AIs and their hello info
   GET  /api/meta?port=N       meta for one AI
   GET  /events?port=N         Server-Sent Events: state and decision messages
-  POST /api/send?port=N       forward one JSON object to the AI
+  POST /api/send?port=N       forward one JSON object to the AI; replies
+                              (ack, error) arrive on /events
 
 Standard library only. Binds to 127.0.0.1.
 """
@@ -142,6 +143,10 @@ class AILink:
                 with self.lock:
                     self.decisions.append(line)
                 self._publish("decision", line)
+            elif kind in ("ack", "error"):
+                # Replies to commands; every viewer of this AI sees them. SSE
+                # reserves "error" for connection errors, so it is renamed.
+                self._publish("aierror" if kind == "error" else kind, line)
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
