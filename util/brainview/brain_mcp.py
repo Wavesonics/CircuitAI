@@ -105,18 +105,6 @@ class Game:
             return None
         return {"x": round(p[0]), "z": round(p[1]), "sector": self.sector(p[0], p[1])}
 
-    def sector_center(self, name):
-        name = name.strip().upper()
-        if len(name) < 2 or not name[0].isalpha() or not name[1:].isdigit():
-            raise ToolError(f"'{name}' is not a sector name like C7")
-        size = self.sector_size()
-        col = ord(name[0]) - ord("A")
-        row = int(name[1:]) - 1
-        m = self.meta()["map"]
-        if not (0 <= col < SECTOR_COLS) or not (0 <= row * size < m["height"]):
-            raise ToolError(f"sector {name} is off the map")
-        return (col + 0.5) * size, min((row + 0.5) * size, m["height"] - 1)
-
 
 class Server:
     def __init__(self, ports):
@@ -126,12 +114,18 @@ class Server:
 
     # -- AI selection
 
-    def connected(self):
-        return [(p, l) for p, l in sorted(self.links.items()) if l.connected and l.hello]
+    def connected(self, wait=0.0):
+        """Live AIs; waits up to `wait` seconds for one when none is live yet."""
+        deadline = time.time() + wait
+        while True:
+            live = [(p, l) for p, l in sorted(self.links.items()) if l.connected and l.hello and l.meta]
+            if live or time.time() >= deadline:
+                return live
+            time.sleep(0.2)
 
     def game(self, args):
         port = args.get("port")
-        live = self.connected()
+        live = self.connected(wait=3.0)
         if port is None:
             if len(live) == 1:
                 return self.games[live[0][0]]
@@ -148,7 +142,7 @@ class Server:
 
     def t_list_ais(self, args):
         out = []
-        for port, link in self.connected():
+        for port, link in self.connected(wait=3.0):
             h = link.hello
             g = self.games[port]
             frame = g.state()["frame"] if link.state else h.get("frame", 0)
@@ -180,7 +174,9 @@ class Server:
             (jobs if t["n"] else idle_jobs)[name] += 1
         queue = [g.def_name(t["def"]) for t in tasks if t.get("recruit") is not None and "def" in t]
 
-        enemies = st["enemies"]
+        # Fakes (id -1) are guesses from unseen damage, kept apart from real sightings
+        enemies = [e for e in st["enemies"] if e[0] >= 0]
+        inferred = len(st["enemies"]) - len(enemies)
         seen = sum(1 for e in enemies if e[4] & 1)
         radar = sum(1 for e in enemies if not e[4] & 1 and e[4] & 2)
         enemy_types = collections.Counter(g.def_name(e[1]) for e in enemies if e[1] >= 0)
@@ -216,6 +212,7 @@ class Server:
             "factoryQueue": queue,
             "enemies": {
                 "known": len(enemies), "inSight": seen, "radarOnly": radar,
+                "unseenAttackers": inferred,
                 "mobileThreat": round(mil["enemyMobileThreat"]), "staticThreat": round(mil["enemyStaticThreat"]),
                 "byType": dict(enemy_types.most_common(15)),
                 "strongestGroups": [{"at": g.pos(gr[:2]), "units": gr[5], "metalCost": round(gr[2]),
@@ -252,29 +249,32 @@ class Server:
         if len(data) != grid["w"] * grid["h"]:
             raise ToolError(f"layer {name} is not ready yet")
 
-        # One character per sector, using the strongest cell in it
+        # One character per sector, from the strongest positive and negative cells in it
         size = g.sector_size()
         rows = math.ceil(meta["map"]["height"] / size)
-        cells = [[None] * SECTOR_COLS for _ in range(rows)]
+        hi = [[0.0] * SECTOR_COLS for _ in range(rows)]
+        lo = [[0.0] * SECTOR_COLS for _ in range(rows)]
         for gz in range(grid["h"]):
             for gx in range(grid["w"]):
                 v = data[gz * grid["w"] + gx]
                 c = min(int(gx * grid["cell"] // size), SECTOR_COLS - 1)
                 r = min(int(gz * grid["cell"] // size), rows - 1)
-                cur = cells[r][c]
-                if cur is None or abs(v) > abs(cur):
-                    cells[r][c] = v
-        flat = [abs(v) for row in cells for v in row if v]
-        scale = max(flat) if flat else 1.0
+                hi[r][c] = max(hi[r][c], v)
+                lo[r][c] = min(lo[r][c], v)
+        scale = max([max(hi[r][c], -lo[r][c]) for r in range(rows) for c in range(SECTOR_COLS)] + [1e-6])
         diverging = name == "influence"
 
-        def symbol(v):
-            if v is None or abs(v) < scale * 0.05:
-                return "."
-            t = abs(v) / scale
+        def symbol(r, c):
+            pos, neg = hi[r][c] / scale, -lo[r][c] / scale
             if diverging:
+                if pos >= 0.25 and neg >= 0.25:
+                    return "#"  # both sides strong: a front line
+                t, v = (pos, 1) if pos >= neg else (neg, -1)
+                if t < 0.05:
+                    return "."
                 return ("o" if t < 0.5 else "O") if v > 0 else ("x" if t < 0.5 else "X")
-            return "1234"[min(3, int(t * 4))]
+            t = max(pos, neg)
+            return "." if t < 0.05 else "1234"[min(3, int(t * 4))]
 
         marks = {}
         for label, p in (("B", st["basePos"]), ("E", st["enemyPos"])):
@@ -289,10 +289,10 @@ class Server:
             row = []
             for col in range(SECTOR_COLS):
                 sec = f"{chr(ord('A') + col)}{r + 1}"
-                row.append(marks.get(sec, symbol(cells[r][col])))
+                row.append(marks.get(sec, symbol(r, col)))
             lines.append(f"{r + 1:>3} " + " ".join(row))
-        legend = ("O/o strong/weak ours, X/x strong/weak enemy, . contested or empty" if diverging
-                  else "1-4 low to high, . none")
+        legend = ("O/o strong/weak ours, X/x strong/weak enemy, # both sides strong (front line), . empty"
+                  if diverging else "1-4 low to high, . none")
         return {"layer": name, "meaning": desc, "peak": round(scale, 2),
                 "legend": legend + "; B our base, E enemy centre, F attack focus",
                 "grid": "\n".join(lines)}
@@ -343,9 +343,13 @@ class Server:
         limit = int(args.get("limit", 40))
         base = st["basePos"]
         out = []
+        unseen = []
         for eid, did, x, z, los, cost in st["enemies"]:
-            seen = "fake (inferred from damage)" if eid < 0 else "in sight" if los & 1 else \
-                "radar blip" if los & 2 else "last known position"
+            if eid < 0:
+                # Placed where damage came from; the type is the AI's guess
+                unseen.append({"at": g.pos([x, z]), "guessedUnit": g.def_name(did)})
+                continue
+            seen = "in sight" if los & 1 else "radar blip" if los & 2 else "last known position"
             out.append({"unit": g.def_name(did), "at": g.pos([x, z]), "seen": seen, "metalCost": round(cost),
                         "_d": (x - base[0]) ** 2 + (z - base[1]) ** 2})
         out.sort(key=lambda e: e["_d"])
@@ -354,14 +358,16 @@ class Server:
         groups = [{"at": g.pos(gr[:2]), "units": gr[5], "metalCost": round(gr[2]), "strength": round(gr[3], 1)}
                   for gr in sorted(st["groups"], key=lambda gr: -gr[3]) if gr[5]]
         return {"known": len(out), "closestToOurBaseFirst": out[:limit], "truncated": len(out) > limit,
-                "groups": groups}
+                "unseenAttackers": unseen, "groups": groups}
 
     def t_get_decisions(self, args):
         g = self.game(args)
         kind = args.get("kind")
         limit = max(1, min(int(args.get("limit", 5)), 20))
         out = []
-        for raw in reversed(list(g.link.decisions)):
+        with g.link.lock:  # the reader thread appends concurrently
+            recent = list(g.link.decisions)
+        for raw in reversed(recent):
             d = json.loads(raw)
             if kind and d["kind"] != kind:
                 continue
@@ -400,9 +406,11 @@ class Server:
 
     def dispatch(self, msg):
         method = msg.get("method")
-        mid = msg.get("id")
-        if mid is None:
+        if "id" not in msg:
             return None  # notification
+        mid = msg["id"]
+        if mid is None:
+            return self.error(None, -32600, "request id must not be null")
         try:
             if method == "initialize":
                 asked = (msg.get("params") or {}).get("protocolVersion")
@@ -511,7 +519,6 @@ def main():
     ap.add_argument("--ports", default="7710-7717", help="AI brain ports, e.g. 7710-7713")
     args = ap.parse_args()
     server = Server(parse_ports(args.ports))
-    time.sleep(0.3)  # let the AI links connect before the first request
     server.serve()
 
 

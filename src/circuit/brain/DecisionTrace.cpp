@@ -62,6 +62,27 @@ CDecisionRecord::SOption* CDecisionRecord::RejectedOption(std::string label, con
 	return &Option(std::move(label)).Reject(reason);
 }
 
+namespace {
+// Indexed by IBuilderTask::BuildType, including the slot of _SIZE_
+const char* const BUILD_TYPE_NAMES[] = {
+	"factory", "nano", "store", "pylon", "energy", "geo", "geoup", "defence", "bunker", "big_gun", "radar",
+	"sonar", "convert", "mex", "mexup", "repair", "reclaim", "resurrect", "recruit", "terraform",
+	"", "patrol", "guard", "combat", "wait"
+};
+static_assert(sizeof(BUILD_TYPE_NAMES) / sizeof(BUILD_TYPE_NAMES[0])
+		== static_cast<size_t>(IBuilderTask::BuildType::WAIT) + 1);
+}  // namespace
+
+const char* BrainBuildTypeName(int buildType)
+{
+	return ((buildType >= 0) && (buildType < BrainBuildTypeCount())) ? BUILD_TYPE_NAMES[buildType] : "";
+}
+
+int BrainBuildTypeCount()
+{
+	return sizeof(BUILD_TYPE_NAMES) / sizeof(BUILD_TYPE_NAMES[0]);
+}
+
 std::string BrainTaskLabel(const IUnitTask* task)
 {
 	static const char* const typeNames[] = {"none", "player", "idle", "wait", "retreat", "builder", "factory", "fighter"};
@@ -74,21 +95,11 @@ std::string BrainTaskLabel(const IUnitTask* task)
 	const int type = static_cast<int>(task->GetType());
 	std::string result = typeNames[(type >= 0 && type < 8) ? type : 0];
 	if (auto* bt = dynamic_cast<const IBuilderTask*>(task)) {
-		static const std::vector<std::string> buildNames = [] {
-			std::vector<std::string> names(static_cast<size_t>(IBuilderTask::BuildType::WAIT) + 1);
-			for (const auto& kv : IBuilderTask::GetBuildNames()) {
-				const size_t idx = static_cast<size_t>(kv.second);
-				if (idx < names.size()) {
-					names[idx] = kv.first;
-				}
-			}
-			return names;
-		}();
-		const size_t idx = static_cast<size_t>(bt->GetBuildType());
+		const char* name = BrainBuildTypeName(static_cast<int>(bt->GetBuildType()));
 		if (dynamic_cast<const CRecruitTask*>(task) != nullptr) {
 			result = "recruit";
-		} else if ((idx < buildNames.size()) && !buildNames[idx].empty()) {
-			result = buildNames[idx];
+		} else if (name[0] != '\0') {
+			result = name;
 		}
 	} else if (auto* ft = dynamic_cast<const IFighterTask*>(task)) {
 		const int fight = static_cast<int>(ft->GetFightType());

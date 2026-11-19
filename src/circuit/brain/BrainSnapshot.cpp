@@ -154,16 +154,9 @@ const std::string& CBrainServer::GetMeta()
 	}
 	js.EndArr();
 
-	std::vector<std::string> buildNames(static_cast<size_t>(IBuilderTask::BuildType::_SIZE_));
-	for (const auto& kv : IBuilderTask::GetBuildNames()) {
-		const size_t idx = static_cast<size_t>(kv.second);
-		if (idx < buildNames.size()) {
-			buildNames[idx] = kv.first;
-		}
-	}
 	js.Key("buildTypes").BeginArr();
-	for (const std::string& name : buildNames) {
-		js.Val(name);
+	for (int i = 0; i < BrainBuildTypeCount(); ++i) {
+		js.Val(BrainBuildTypeName(i));
 	}
 	js.EndArr();
 

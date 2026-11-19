@@ -122,6 +122,11 @@ uint64_t BrainTaskId(const void* task);
 // Short label for a task kind, e.g. "mex", "recruit" or "fight raid"
 std::string BrainTaskLabel(const IUnitTask* task);
 
+// Name of an IBuilderTask::BuildType value, covering service jobs (repair,
+// reclaim, patrol...) that IBuilderTask::GetBuildNames leaves out
+const char* BrainBuildTypeName(int buildType);
+int BrainBuildTypeCount();
+
 } // namespace circuit
 
 #endif // SRC_CIRCUIT_BRAIN_DECISIONTRACE_H_
