@@ -50,6 +50,15 @@ const char* const BUILD_ORDER_TYPES[] = {
 	"factory", "nano", "store", "energy", "defence", "bunker", "big_gun", "radar", "sonar", "convert", "mex"
 };
 
+std::string BuildTypeList()
+{
+	std::string list;
+	for (const char* t : BUILD_ORDER_TYPES) {
+		list += list.empty() ? t : std::string(", ") + t;
+	}
+	return list;
+}
+
 bool ReadSeconds(const Json::Value& msg, int def, int max, int& out)
 {
 	const Json::Value& v = msg["seconds"];
@@ -317,12 +326,12 @@ std::string CBrainServer::CmdBuild(const Json::Value& msg, CJsonOut& result)
 		} else if (buildDef->IsRoleStatic() && (buildDef->GetPower() > THREAT_MIN)) {
 			typeName = "defence";
 		} else {
-			return "can't tell what kind of structure " + name + " is; pass \"type\"";
+			return "can't tell what kind of structure " + name + " is; pass type as one of " + BuildTypeList();
 		}
 	}
 	const auto& allowed = BUILD_ORDER_TYPES;
 	if (std::find(std::begin(allowed), std::end(allowed), typeName) == std::end(allowed)) {
-		return "type must be a structure kind such as factory, energy, defence, mex";
+		return "type must be one of " + BuildTypeList();
 	}
 	const auto bit = IBuilderTask::GetBuildNames().find(typeName);
 	if (bit == IBuilderTask::GetBuildNames().end()) {
@@ -428,6 +437,7 @@ std::string CBrainServer::CmdUnits(const Json::Value& msg, CJsonOut& result)
 
 	const int frame = circuit->GetLastFrame();
 	const bool needsMobile = needsPos || (action == "retreat");
+	std::vector<std::pair<int, const char*>> skipped;
 	result.Key("applied").BeginArr();
 	for (const Json::Value& idv : ids) {
 		if (!idv.isInt()) {
@@ -435,10 +445,12 @@ std::string CBrainServer::CmdUnits(const Json::Value& msg, CJsonOut& result)
 		}
 		CCircuitUnit* unit = circuit->GetTeamUnit(idv.asInt());
 		if ((unit == nullptr) || unit->IsDead() || (unit->GetTask() == nullptr)) {
+			skipped.emplace_back(idv.asInt(), "not a living unit of this AI");
 			continue;
 		}
 		if (needsMobile && !unit->GetCircuitDef()->IsMobile()) {
-			continue;  // structures cannot move; they are left out of "applied"
+			skipped.emplace_back(unit->GetId(), "a structure cannot move");
+			continue;
 		}
 		const bool isPlayer = (unit->GetTask()->GetType() == IUnitTask::Type::PLAYER);
 		if (action == "release") {
@@ -454,7 +466,8 @@ std::string CBrainServer::CmdUnits(const Json::Value& msg, CJsonOut& result)
 			ITaskModule* mgr = unit->GetTask()->GetManager();
 			CRetreatTask* task = (mgr != nullptr) ? mgr->EnqueueRetreat() : nullptr;
 			if (task == nullptr) {
-				continue;  // this unit's manager has no retreat behaviour (e.g. factories)
+				skipped.emplace_back(unit->GetId(), "this kind of unit has no retreat behaviour");
+				continue;
 			}
 			mgr->AssignTask(unit, task);
 		} else {
@@ -474,6 +487,15 @@ std::string CBrainServer::CmdUnits(const Json::Value& msg, CJsonOut& result)
 		result.Val(unit->GetId());
 	}
 	result.EndArr();
+	// [id, reason]
+	result.Key("skipped").BeginArr();
+	for (const auto& s : skipped) {
+		result.BeginArr().Val(s.first).Val(s.second).EndArr();
+	}
+	result.EndArr();
+	if ((action == "move") || (action == "fight") || (action == "stop")) {
+		result.Field("returnsToAI", frame + seconds * FRAMES_PER_SEC);
+	}
 	return "";
 }
 

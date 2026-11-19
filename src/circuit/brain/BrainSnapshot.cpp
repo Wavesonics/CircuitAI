@@ -370,15 +370,17 @@ void CBrainServer::WriteEnemies(CJsonOut& js) const
 {
 	CEnemyManager* enemyMgr = circuit->GetEnemyManager();
 
-	// [id (-1 fake), defId (-1 unknown), x, z, losBits, cost]
+	// [id (-1 fake), defId (-1 unknown), x, z, losBits, cost, lastSeen]
 	js.Key("enemies").BeginArr();
 	for (const SEnemyData& e : enemyMgr->GetHostileDatas()) {
+		const CEnemyUnit* eu = e.IsFake() ? nullptr : enemyMgr->GetEnemyUnit(e.id);
 		js.BeginArr()
 			.Val(e.id)
 			.Val((e.cdef != nullptr) ? e.cdef->GetId() : -1)
 			.Val(e.pos.x).Val(e.pos.z)
 			.Val(static_cast<int>(e.losStatus))
 			.Val(e.cost)
+			.Val((eu != nullptr) ? eu->GetLastSeen() : -1)
 		.EndArr();
 	}
 	js.EndArr();

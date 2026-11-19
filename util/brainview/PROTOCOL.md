@@ -46,7 +46,9 @@ Sent every `stateEvery` frames (default 30, one per second at normal speed).
   - fighter: `fight, pos, power, target?, targetPos?, leader?`; defend squads
     also `promote` (fight type they turn into) and `promoteAt` (power at which
     they do, lowered or raised by an attack focus)
-- `enemies`: `[id, defId, x, z, losBits, cost]`. `id` is -1 for fake enemies
+- `enemies`: `[id, defId, x, z, losBits, cost, lastSeen]`. `lastSeen` is the
+  frame the enemy left radar and sight, or -1 while it is still on radar or in
+  sight (and for fakes). `id` is -1 for fake enemies
   (inferred from damage), `defId` is -1 when only seen on radar. `losBits`:
   `1` LOS, `2` radar, `4` hidden, `8` neutral/ignored, `32` dying, `64` dead.
 - `groups`: `[x, z, cost, influence, vagueMetric, unitCount]` (enemy k-means
@@ -130,7 +132,9 @@ Reply to every `cmd`: `{t, id?, op, ok, error?, result, control}`.
     (attack-move) and `stop` take the units out of the AI's control for
     `seconds` (default 120, at most 1800) or until `release`; `retreat` hands
     them back to the AI and sends them to retreat. Structures are skipped for
-    move, fight and retreat. Result: `{applied: [ids]}`.
+    move, fight and retreat. Units under control do not retreat on their own
+    when damaged. Result: `{applied: [ids], skipped: [[id, reason]],
+    returnsToAI?: frame}`.
   - `focus` `{x, z, radius?, force?, seconds?}` or `{clear: true}`: for
     `seconds` (default 300, at most 3600):
     - gathering squads turn into attack squads once they out-power the

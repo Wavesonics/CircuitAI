@@ -179,12 +179,23 @@ class Server:
 
         units = collections.Counter(g.def_name(u[1]) for u in st["units"])
         tasks = st["tasks"]
+        members = collections.defaultdict(list)
+        for u in st["units"]:
+            members[u[5]].append(u)
         squads = []
         for t in tasks:
             if t.get("fight") is None or t["n"] == 0:
                 continue
-            squads.append({"type": meta["fightTypes"][t["fight"]], "units": t["n"], "power": round(t.get("power", 0)),
-                           "at": g.pos(t.get("pos")), "target": g.pos(t.get("targetPos"))})
+            ms = members.get(t["id"], [])
+            # A task's pos is where it is heading; the squad is where its units are
+            at = [sum(u[2] for u in ms) / len(ms), sum(u[3] for u in ms) / len(ms)] if ms else t.get("pos")
+            sq = {"squadId": t["id"], "type": meta["fightTypes"][t["fight"]], "units": t["n"],
+                  "composition": dict(collections.Counter(g.def_name(u[1]) for u in ms)),
+                  "power": round(t.get("power", 0), 1), "at": g.pos(at),
+                  "heading": g.pos(t.get("targetPos") or t.get("pos"))}
+            if t.get("promoteAt") is not None:
+                sq["type"] = f"gathering (becomes {meta['fightTypes'][t['promote']]} at power {round(t['promoteAt'], 1)})"
+            squads.append(sq)
         squads.sort(key=lambda s: -s["power"])
         jobs = collections.Counter()
         idle_jobs = collections.Counter()
@@ -228,6 +239,7 @@ class Server:
             },
             "ourUnits": {"total": len(st["units"]), "byType": dict(units.most_common(20)),
                          "armyMetalCost": round(mil["armyCost"])},
+            # A unit can have several roles, so these overlap and do not sum to the army
             "armyByRole": roles[:12],
             "squads": squads[:10],
             "buildJobs": {"active": dict(jobs), "waitingForBuilder": dict(idle_jobs)},
@@ -237,8 +249,7 @@ class Server:
                 "unseenAttackers": inferred,
                 "mobileThreat": round(mil["enemyMobileThreat"]), "staticThreat": round(mil["enemyStaticThreat"]),
                 "byType": dict(enemy_types.most_common(15)),
-                "strongestGroups": [{"at": g.pos(gr[:2]), "units": gr[5], "metalCost": round(gr[2]),
-                                     "strength": round(gr[3], 1)} for gr in groups if gr[5]],
+                "strongestGroups": [self._group(g, gr) for gr in groups if gr[5]],
             },
             "control": {
                 "focus": ({"at": g.pos([c["focus"]["x"], c["focus"]["z"]]), "radius": round(c["focus"]["radius"]),
@@ -339,7 +350,8 @@ class Server:
             if near and (x - near["x"]) ** 2 + (z - near["z"]) ** 2 > near.get("radius", 1000) ** 2:
                 continue
             t = tasks.get(tid)
-            out.append({"id": uid, "unit": d.get("name", "?"), "role": d.get("role", "?"),
+            squad = tid if (t is not None and t.get("fight") is not None) else None
+            out.append({"id": uid, "squadId": squad, "unit": d.get("name", "?"), "role": d.get("role", "?"),
                         "structure": not d.get("mobile", True), "at": g.pos([x, z]), "health": round(hp, 2) if isinstance(hp, (int, float)) else None,
                         "doing": self._task_label(g, t), "yourControl": uid in held})
         out.sort(key=lambda u: (u["role"], u["unit"]))
@@ -359,6 +371,12 @@ class Server:
             return f"fight {meta['fightTypes'][t['fight']]}"
         return meta["taskTypes"][t["type"]] if t["type"] < len(meta["taskTypes"]) else "task"
 
+    @staticmethod
+    def _group(g, gr):
+        # Radar-only units have no known type, so a group of them has no known cost
+        return {"at": g.pos(gr[:2]), "units": gr[5], "metalCost": round(gr[2]) if gr[2] > 0 else "unknown",
+                "strength": round(gr[3], 1)}
+
     def t_get_enemies(self, args):
         g = self.game(args)
         st = g.state()
@@ -366,19 +384,28 @@ class Server:
         base = st["basePos"]
         out = []
         unseen = []
-        for eid, did, x, z, los, cost in st["enemies"]:
+        frame = st["frame"]
+        for e in st["enemies"]:
+            eid, did, x, z, los, cost = e[:6]
+            last_seen = e[6] if len(e) > 6 else -1
             if eid < 0:
                 # Placed where damage came from; the type is the AI's guess
                 unseen.append({"at": g.pos([x, z]), "guessedUnit": g.def_name(did)})
                 continue
-            seen = "in sight" if los & 1 else "radar blip" if los & 2 else "last known position"
+            if los & 1:
+                seen = "in sight"
+            elif los & 2:
+                seen = "radar blip"
+            elif last_seen >= 0:
+                seen = f"last seen {round((frame - last_seen) / FPS)} s ago"
+            else:
+                seen = "last known position"
             out.append({"unit": g.def_name(did), "at": g.pos([x, z]), "seen": seen, "metalCost": round(cost),
                         "_d": (x - base[0]) ** 2 + (z - base[1]) ** 2})
         out.sort(key=lambda e: e["_d"])
         for e in out:
             del e["_d"]
-        groups = [{"at": g.pos(gr[:2]), "units": gr[5], "metalCost": round(gr[2]), "strength": round(gr[3], 1)}
-                  for gr in sorted(st["groups"], key=lambda gr: -gr[3]) if gr[5]]
+        groups = [self._group(g, gr) for gr in sorted(st["groups"], key=lambda gr: -gr[3]) if gr[5]]
         return {"known": len(out), "closestToOurBaseFirst": out[:limit], "truncated": len(out) > limit,
                 "unseenAttackers": unseen, "groups": groups}
 
@@ -386,15 +413,28 @@ class Server:
         g = self.game(args)
         kind = args.get("kind")
         limit = max(1, min(int(args.get("limit", 5)), 20))
+        with_waits = bool(args.get("include_waits", False))
         out = []
+        last_key = None
         with g.link.lock:  # the reader thread appends concurrently
             recent = list(g.link.decisions)
         for raw in reversed(recent):
             d = json.loads(raw)
             if kind and d["kind"] != kind:
                 continue
+            # Nano turrets re-decide to assist every second; that is noise for strategy
+            if not with_waits and d["kind"] == "factory" and d["path"][:1] == [["assist unit", "yes"]]:
+                continue
+            key = (d["kind"], d.get("unitDef"), json.dumps(d["path"]), d.get("result"))
+            if key == last_key and out:
+                out[-1]["repeats"] = out[-1].get("repeats", 1) + 1
+                out[-1]["earliest"] = clock(d["frame"])
+                continue
+            last_key = key
             opts = []
             for i, o in enumerate(d["options"]):
+                if o["label"].endswith("(0 units)"):
+                    continue  # an empty k-means cluster, never a real candidate
                 # Builder labels name the job kind; the def says what it builds
                 label = f"{o['label']} {g.def_name(o['def'])}" if d["kind"] == "builder" and "def" in o else o["label"]
                 entry = {"option": label, "score": round(o["score"], 3) if "score" in o else None}
@@ -412,11 +452,13 @@ class Server:
                         "ruledOutCounts": d.get("rejected", {}), "result": d.get("result")})
             if len(out) >= limit:
                 break
-        return {"decisions": out, "note": "most recent first"}
+        return {"decisions": out, "note": "most recent first; identical back-to-back decisions are merged "
+                                          "(repeats, earliest)"}
 
     def t_get_tuning(self, args):
         g = self.game(args)
-        c = g.state().get("control")
+        # Asked fresh rather than read from the last state, which can be a second old
+        c = self.command(g, "control").get("control")
         if not c:
             raise ToolError("this AI build does not report tuning")
         return {"values": {k: round(v, 4) for k, v in sorted(c["tuning"].items())},
@@ -448,6 +490,10 @@ class Server:
             res = dict(ack["result"])
             if "pos" in res:
                 res["pos"] = g.pos(res["pos"])
+            if "returnsToAI" in res:
+                res["returnsToAI"] = clock(res["returnsToAI"])
+            if res.get("skipped"):
+                res["skipped"] = [{"id": i, "why": why} for i, why in res["skipped"]]
             out["result"] = res
         f = c.get("focus")
         out["focus"] = ({"at": g.pos([f["x"], f["z"]]), "radius": round(f["radius"]), "force": f["force"],
@@ -492,10 +538,16 @@ class Server:
         if args.get("units"):
             ids = [int(u) for u in args["units"]]
             return ids[:self.MAX_ORDER_UNITS], len(ids)
+        if args.get("squad") is not None:
+            squad = int(args["squad"])
+            ids = [u[0] for u in g.state()["units"] if u[5] == squad]
+            if not ids:
+                raise ToolError(f"squad {squad} has no units now (see squadId in get_overview)")
+            return ids[:self.MAX_ORDER_UNITS], len(ids)
         role, name = args.get("role"), args.get("unit")
         area = args.get("from_sector")
         if not (role or name or area):
-            raise ToolError("say which units: units (ids), role, unit type and/or from_sector")
+            raise ToolError("say which units: units (ids), squad, role, unit type and/or from_sector")
         defs = g.defs()
         st = g.state()
         if area:
@@ -653,9 +705,12 @@ tool("get_enemies", "Enemy units the AI knows about (closest to our base first) 
      "attack logic scores.", {"limit": {"type": "integer", "description": "default 40"}})(Server.t_get_enemies)
 tool("get_decisions",
      "The AI's most recent decisions with the branch it took, its inputs and the options it weighed. "
-     "Kinds: factory (what to build), builder (which job), attackTarget (which enemy group), retreat.",
+     "Kinds: factory (what to build), builder (which job), attackTarget (which enemy group), retreat. "
+     "Identical back-to-back decisions are merged, and nano turrets' assist waits are left out.",
      {"kind": {"type": "string", "enum": ["factory", "builder", "attackTarget", "retreat"]},
-      "limit": {"type": "integer", "description": "1-20, default 5"}})(Server.t_get_decisions)
+      "limit": {"type": "integer", "description": "1-20, default 5"},
+      "include_waits": {"type": "boolean", "description": "also show nano turrets' assist waits"}})(
+    Server.t_get_decisions)
 tool("get_tuning", "Current values of every tunable the AI exposes, and which ones you changed.")(
     Server.t_get_tuning)
 
@@ -666,7 +721,9 @@ tool("set_tuning",
      "Change one of the AI's tuning values (see get_tuning). It applies from the AI's next decision and lasts "
      "until reset. Useful keys: factory.buildPowerRatio (0-10, builders per metal income: raise to expand "
      "faster), factory.responseWeight (0-10, how hard production counters the enemy's army), quota.attack "
-     "(power a squad gathers before attacking: lower attacks sooner and smaller), quota.raidMin/raidAvg, "
+     "(the floor on a gathering squad's power before it attacks; it also waits until it out-powers the "
+     "enemy's strongest group, or the strongest inside your focus, so lowering this alone often changes "
+     "little: see promoteAt in get_overview squads), quota.raidMin/raidAvg, "
      "quota.scouts, role.<role>.maxPercent (0-1, cap on that role's share of the army; 0 stops building it), "
      "role.<role>.factor (0-100, how readily that role is built to counter the enemy).",
      {"key": {"type": "string"}, "value": {"type": "number"}}, ("key", "value"))(Server.t_set_tuning)
@@ -687,12 +744,15 @@ tool("recruit", "Queue units at a factory at high priority (built before the AI'
       "factory": {"type": "integer", "description": "factory unit id"}}, ("unit",))(Server.t_recruit)
 tool("order_units",
      "Give units a direct order. move/fight (attack-move)/stop take them out of the AI's hands for "
-     "`seconds` (default 120, max 1800), after which the AI uses them again; retreat sends them to the AI's "
-     "retreat behaviour; release hands them back now. Pick units by ids, or by role, unit type and/or the "
-     "sector they are in (structures are never selected). Prefer set_focus for steering the whole army; use "
-     "this for specific strikes or rescues.",
+     "`seconds` (default 120, max 1800; long maps need more), after which the AI uses them again. While "
+     "under your control they do NOT retreat when damaged, so watch them or keep orders short. retreat "
+     "sends them to the AI's retreat behaviour; release hands them back now. Pick units by ids (squadId "
+     "via get_units or squad), or by role, unit type and/or the sector they are in (structures are never "
+     "selected). The result lists units skipped and why, and when control lapses. Prefer set_focus for "
+     "steering the whole army; use this for specific strikes or rescues.",
      {"action": {"type": "string", "enum": ["fight", "move", "stop", "retreat", "release"]},
       "units": {"type": "array", "items": {"type": "integer"}},
+      "squad": {"type": "integer", "description": "all units of one squad (squadId from get_overview)"},
       "role": {"type": "string"}, "unit": {"type": "string"},
       "from_sector": {"type": "string", "description": "only units inside this sector; without role or unit "
                                                        "this skips the commander and constructors"},
