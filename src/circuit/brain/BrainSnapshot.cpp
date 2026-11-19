@@ -223,6 +223,7 @@ const std::string& CBrainServer::GetMeta()
 
 std::string CBrainServer::MakeState(int frame)
 {
+	InitTunables();
 	CJsonOut js;
 	js.BeginObj()
 		.Field("t", "state")
@@ -250,6 +251,9 @@ std::string CBrainServer::MakeState(int frame)
 		open += metalMgr->IsOpenSpot(static_cast<int>(i)) ? '1' : '0';
 	}
 	js.Field("openSpots", open);
+
+	js.Key("control");
+	WriteControl(js);
 
 	js.EndObj();
 	return js.Take();

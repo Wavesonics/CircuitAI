@@ -159,6 +159,36 @@ public:
 	const SSideInfo& GetSideInfo() const;
 	const std::vector<SSideInfo>& GetSideInfos() const { return sideInfos; }
 
+	// Runtime tuning (brain control). Values start from the config and are
+	// read where they are used, so changes apply to the next decision.
+	unsigned GetMaxScouts() const { return maxScouts; }
+	void SetMaxScouts(unsigned value) { maxScouts = value; }
+	float GetMinAttackers() const { return minAttackers; }
+	void SetMinAttackers(float value) { minAttackers = value; }
+	float GetRaidMin() const { return raid.min; }
+	float GetRaidAvg() const { return raid.avg; }
+	void SetRaid(float min, float avg) { raid.min = min; raid.avg = avg; }
+	float GetRoleMaxPercent(CCircuitDef::RoleT type) const { return roleInfos[type].maxPerc; }
+	float GetRoleFactor(CCircuitDef::RoleT type) const { return roleInfos[type].factor; }
+	void SetRoleLimits(CCircuitDef::RoleT type, float maxPerc, float factor) {
+		roleInfos[type].maxPerc = maxPerc;
+		roleInfos[type].factor = factor;
+	}
+	CCircuitDef::RoleT GetRoleCount() const { return roleInfos.size(); }
+
+	// Attack focus set from outside the AI: attack squads only pick enemies
+	// within radius of pos (nearest to pos first) and travel to pos when none
+	// are there. isForce also ignores the squad-strength check.
+	struct SFocus {
+		springai::AIFloat3 pos;
+		float radius = 0.f;
+		bool isForce = false;
+		bool isActive = false;
+	};
+	const SFocus& GetFocus() const { return focus; }
+	void SetFocus(const springai::AIFloat3& pos, float radius, bool isForce) { focus = {pos, radius, isForce, true}; }
+	void ClearFocus() { focus.isActive = false; }
+
 	CCircuitDef* GetBigGunDef() const { return bigGunDef; }
 	CCircuitDef* GetDefaultPorc() const { return GetSideInfo().defaultPorc; }
 	CCircuitDef* GetLowSonar(const CCircuitUnit* builder = nullptr) const;
@@ -244,6 +274,7 @@ private:
 	} raid;
 	unsigned int maxScouts = 0;
 	float minAttackers = 0.f;
+	SFocus focus;
 	struct SThreatQuota {
 		float min;
 		float len;

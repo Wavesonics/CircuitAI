@@ -58,6 +58,7 @@ Sent every `stateEvery` frames (default 30, one per second at normal speed).
   - `threatAir`, `threatSurf`, `threatAmph`, `threatCloak`
   - `inflEnemy`, `inflAlly`, `inflAllyDefend`, `influence` (ally minus enemy)
 - `openSpots`: string of `0`/`1` per metal spot, `1` meaning free to claim
+- `control`: the current control state, see `ack` below
 
 ### `decision`
 Sent as the AI makes a traced decision, at most 40 per kind per second of
@@ -78,6 +79,17 @@ game time (excess is counted in `state.droppedDecisions`).
 Score direction depends on the kind: `factory` options are weights for a
 random roll (higher is likelier); `builder` and `attackTarget` pick the lowest.
 
+### `ack`
+Reply to every `cmd`: `{t, id?, op, ok, error?, result, control}`.
+- `id` echoes the command's `id` (integer or string) when one was sent.
+- `result` holds op-specific details, listed with each op.
+- `control` is the control state after the command:
+  - `tuning`: `{key: value}` for every tunable
+  - `changed`: `{key: originalValue}` for tunables changed since the last reset
+  - `limits`: `[defId, limit, originalLimit]` for unit limits changed
+  - `focus`: `{x, z, radius, force}` or null
+  - `controlled`: ids of units taken out of the AI's hands by `units` orders
+
 ### `error`
 `{t, error}` in reply to a malformed or unknown client message.
 
@@ -87,3 +99,36 @@ random roll (higher is likelier); `builder` and `attackTarget` pick the lowest.
   frames (1..1800) and turn decision tracing on or off. Either field may be
   omitted. Applies to all clients of that AI.
 - `{"t":"meta"}`: resend `meta`.
+- `{"t":"cmd","op":...,"id"?:...}`: change what the AI does; answered by an
+  `ack`. Ops:
+  - `control`: no change; returns the control state.
+  - `set` `{key, value}`: set a tunable. Keys:
+    - `factory.buildPowerRatio` (0..10): builders wanted per metal income
+    - `factory.responseWeight` (0..10): how strongly production counters the
+      enemy's army
+    - `quota.scouts` (0..50), `quota.attack` (0..10000, power a squad needs
+      before it attacks), `quota.raidMin`, `quota.raidAvg` (0..10000)
+    - `role.<role>.maxPercent` (0..1): cap on that role's share of the army
+    - `role.<role>.factor` (0..100): how readily that role is built in response
+  - `reset` `{key?}`: restore one tunable, or with no key every tunable and
+    unit limit.
+  - `limit` `{def, limit}`: cap how many of a unit the AI may have; 0 bans it,
+    `null` restores the original.
+  - `build` `{def, x, z, type?}`: queue a structure at top priority. `type` is
+    inferred when omitted (factory, nano, store, energy, geo, defence, bunker,
+    big_gun, radar, sonar, convert, mex). Mex orders snap to the nearest free
+    metal spot. Result: `{type, pos}`.
+  - `recruit` `{def, count?, factory?}`: queue 1-20 units at high priority, at
+    the given factory unit or the first one that can build them. Result:
+    `{factory}`.
+  - `units` `{action, units, x?, z?}`: `move`, `fight` (attack-move) and `stop`
+    take the units out of the AI's control until `release`; `retreat` hands
+    them back to the AI and sends them to retreat. Structures are skipped for
+    move, fight and retreat. Result: `{applied: [ids]}`.
+  - `focus` `{x, z, radius?, force?}` or `{clear: true}`: attack squads only
+    pick enemies within `radius` (default 1000) of the point, nearest to it
+    first, and travel there when none are around. `force` also ignores the
+    squad-strength check. Defending squads are not affected.
+
+Tuning changes apply from the AI's next decision. Nothing persists between
+games.

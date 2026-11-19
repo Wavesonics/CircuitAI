@@ -266,6 +266,10 @@ void CAttackTask::FindTarget()
 		trace->Step("score enemy groups", "lowest vagueMetric * dist^2 * scale wins");
 	}
 	int bestOption = -1;
+	const CMilitaryManager::SFocus& focus = circuit->GetMilitaryManager()->GetFocus();
+	if (trace && focus.isActive) {
+		trace->Step("attack focus set", focus.isForce ? "yes, forced" : "yes");
+	}
 	const std::vector<CEnemyManager::SEnemyGroup>& groups = circuit->GetEnemyManager()->GetEnemyGroups();
 	for (unsigned i = 0; i < groups.size(); ++i) {
 		const CEnemyManager::SEnemyGroup& group = groups[i];
@@ -278,11 +282,17 @@ void CAttackTask::FindTarget()
 				.Pos(group.pos).Part("influence", group.influence).Part("cost", group.cost)
 				.Part("vagueMetric", group.vagueMetric).Part("scale", scale);
 		}
+		if (focus.isActive && (group.pos.SqDistance2D(focus.pos) > SQUARE(focus.radius))) {
+			if (opt) { opt->Reject("outside attack focus"); }
+			continue;
+		}
 		if (hasGoodTarget && isOverpowered) {
 			if (opt) { opt->Reject("too weak to bother, better target found"); }
 			continue;
 		}
-		if ((maxPower <= group.influence * scale) && (inflMap->GetInfluenceAt(group.pos) < INFL_SAFE)) {
+		if (!(focus.isActive && focus.isForce)
+			&& (maxPower <= group.influence * scale) && (inflMap->GetInfluenceAt(group.pos) < INFL_SAFE))
+		{
 			if (opt) { opt->Reject("too strong for this squad"); }
 			continue;
 		}
@@ -335,7 +345,10 @@ void CAttackTask::FindTarget()
 				}
 			}
 
-			const float sqOEDist = group.vagueMetric * pos.SqDistance2D(ePos) * scale;  // Own to Enemy distance
+			// With a focus, closeness to the focus replaces closeness to the squad
+			const float sqOEDist = focus.isActive
+					? group.vagueMetric * focus.pos.SqDistance2D(ePos)
+					: group.vagueMetric * pos.SqDistance2D(ePos) * scale;  // Own to Enemy distance
 			if (opt && (std::isnan(opt->score) || (sqOEDist < opt->score))) {
 				opt->Score(sqOEDist);
 			}
@@ -376,7 +389,12 @@ void CAttackTask::ApplyTargetPath(const CQueryPathSingle* query)
 void CAttackTask::FallbackFrontPos()
 {
 	CCircuitAI* circuit = manager->GetCircuit();
-	circuit->GetMilitaryManager()->FillFrontPos(leader, urgentPositions);
+	const CMilitaryManager::SFocus& focus = circuit->GetMilitaryManager()->GetFocus();
+	if (focus.isActive) {
+		urgentPositions = {focus.pos};
+	} else {
+		circuit->GetMilitaryManager()->FillFrontPos(leader, urgentPositions);
+	}
 	if (urgentPositions.empty()) {
 		FallbackBasePos();
 		return;

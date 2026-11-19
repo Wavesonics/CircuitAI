@@ -12,10 +12,16 @@
 #ifndef SRC_CIRCUIT_BRAIN_BRAINSERVER_H_
 #define SRC_CIRCUIT_BRAIN_BRAINSERVER_H_
 
+#include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
+
+namespace Json {
+	class Value;
+}
 
 namespace circuit {
 
@@ -69,6 +75,23 @@ private:
 	void HandleLine(SClient& client, const std::string& line);
 	void Close(SClient& client);
 
+	// BrainControl.cpp: commands that change the AI's behaviour
+	struct STunable {
+		std::function<float()> get;
+		std::function<void(float)> set;
+		float min, max;
+	};
+	void InitTunables();
+	void HandleCommand(SClient& client, const Json::Value& msg);
+	std::string CmdSet(const Json::Value& msg);
+	std::string CmdReset(const Json::Value& msg);
+	std::string CmdLimit(const Json::Value& msg);
+	std::string CmdBuild(const Json::Value& msg, CJsonOut& result);
+	std::string CmdRecruit(const Json::Value& msg, CJsonOut& result);
+	std::string CmdUnits(const Json::Value& msg, CJsonOut& result);
+	std::string CmdFocus(const Json::Value& msg);
+	void WriteControl(CJsonOut& js) const;
+
 	// BrainSnapshot.cpp
 	std::string MakeHello() const;
 	const std::string& GetMeta();
@@ -84,6 +107,11 @@ private:
 	int port;
 	std::vector<SClient> clients;
 	std::string meta;  // static map/def data, built once on first connect
+
+	std::map<std::string, STunable> tunables;
+	std::map<std::string, float> tunedFrom;  // tunable key: value before the first change
+	std::map<int, int> limitedFrom;  // def id: unit limit before the first change
+	std::set<int> controlled;  // unit ids taken out of AI control by commands
 
 	int stateInterval;  // frames between state snapshots
 	int lastStateFrame;

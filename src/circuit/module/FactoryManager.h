@@ -169,6 +169,12 @@ public:
 	bool CanEnqueueTask() const { return factoryTasks.size() < factories.size() * 2; }
 	const std::vector<CRecruitTask*>& GetTasks() const { return factoryTasks; }
 	bool IsAssistRequired() const { return isAssistRequired; }
+
+	// Runtime tuning (brain control); read on every production decision
+	float GetBuildPowerRatio() const { return bpRatio; }
+	void SetBuildPowerRatio(float value) { bpRatio = value; }
+	float GetResponseWeight() const { return reWeight; }
+	void SetResponseWeight(float value) { reWeight = value; }
 	void ApplySwitchFrame();
 	bool IsSwitchTime();
 	void RaiseSwitchTime() { isSwitchTime = true; }

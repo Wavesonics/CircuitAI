@@ -339,6 +339,8 @@ void CBrainServer::HandleLine(SClient& client, const std::string& line)
 		}
 	} else if (type == "meta") {
 		Send(client, GetMeta());
+	} else if (type == "cmd") {
+		HandleCommand(client, msg);
 	} else {
 		Send(client, R"({"t":"error","error":"unknown message type"})");
 	}
