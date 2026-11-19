@@ -33,12 +33,36 @@ using namespace springai;
 
 namespace {
 constexpr int MAX_RECRUIT_COUNT = 20;
+// Queued recruits are built before anything the AI picks itself, so a long
+// queue would take over production
+constexpr size_t MAX_FACTORY_QUEUE = 20;
 constexpr float DEFAULT_FOCUS_RADIUS = 1000.f;
+// Orders lapse on their own so a client that goes away cannot strand units
+// or pin the army to a stale point
+constexpr int DEFAULT_CONTROL_SECONDS = 120;
+constexpr int MAX_CONTROL_SECONDS = 30 * 60;
+constexpr int DEFAULT_FOCUS_SECONDS = 5 * 60;
+constexpr int MAX_FOCUS_SECONDS = 60 * 60;
 
-// Structure kinds a build order may name; the rest are AI-internal services
+// Structure kinds a build order may name. Geo needs a geothermal spot id the
+// order does not resolve, and the rest are AI-internal services.
 const char* const BUILD_ORDER_TYPES[] = {
-	"factory", "nano", "store", "energy", "geo", "defence", "bunker", "big_gun", "radar", "sonar", "convert", "mex"
+	"factory", "nano", "store", "energy", "defence", "bunker", "big_gun", "radar", "sonar", "convert", "mex"
 };
+
+bool ReadSeconds(const Json::Value& msg, int def, int max, int& out)
+{
+	const Json::Value& v = msg["seconds"];
+	if (v.isNull()) {
+		out = def;
+		return true;
+	}
+	if (!v.isInt() || (v.asInt() < 1) || (v.asInt() > max)) {
+		return false;
+	}
+	out = v.asInt();
+	return true;
+}
 
 bool ReadPos(const Json::Value& msg, AIFloat3& pos)
 {
@@ -165,7 +189,8 @@ std::string CBrainServer::CmdSet(const Json::Value& msg)
 
 std::string CBrainServer::CmdReset(const Json::Value& msg)
 {
-	// {"key": k} resets one tunable; no key resets every tunable and unit limit
+	// {"key": k} resets one tunable; no key undoes every change: tunables, unit
+	// limits, the attack focus and units under brain control
 	const Json::Value& key = msg["key"];
 	if (key.isString()) {
 		auto it = tunedFrom.find(key.asString());
@@ -187,7 +212,44 @@ std::string CBrainServer::CmdReset(const Json::Value& msg)
 		}
 	}
 	limitedFrom.clear();
+	circuit->GetMilitaryManager()->ClearFocus();
+	focusUntil = -1;
+	ReleaseAll();
 	return "";
+}
+
+void CBrainServer::ReleaseAll()
+{
+	for (const auto& kv : controlled) {
+		CCircuitUnit* unit = circuit->GetTeamUnit(kv.first);
+		if ((unit != nullptr) && !unit->IsDead() && (unit->GetTask() != nullptr)
+			&& (unit->GetTask()->GetType() == IUnitTask::Type::PLAYER))
+		{
+			circuit->UnitControl(unit, true);
+		}
+	}
+	controlled.clear();
+}
+
+void CBrainServer::ExpireControl(int frame)
+{
+	for (auto it = controlled.begin(); it != controlled.end();) {
+		CCircuitUnit* unit = circuit->GetTeamUnit(it->first);
+		const bool isHeld = (unit != nullptr) && !unit->IsDead() && (unit->GetTask() != nullptr)
+				&& (unit->GetTask()->GetType() == IUnitTask::Type::PLAYER);
+		if (!isHeld) {
+			it = controlled.erase(it);  // died, or something else took it back
+		} else if (frame >= it->second) {
+			circuit->UnitControl(unit, true);
+			it = controlled.erase(it);
+		} else {
+			++it;
+		}
+	}
+	if ((focusUntil >= 0) && (frame >= focusUntil)) {
+		circuit->GetMilitaryManager()->ClearFocus();
+		focusUntil = -1;
+	}
 }
 
 std::string CBrainServer::CmdLimit(const Json::Value& msg)
@@ -307,6 +369,10 @@ std::string CBrainServer::CmdRecruit(const Json::Value& msg, CJsonOut& result)
 	}
 
 	CFactoryManager* factoryMgr = circuit->GetFactoryManager();
+	if (factoryMgr->GetTasks().size() + count > MAX_FACTORY_QUEUE) {
+		return utils::string_format("the factory queue holds %i units; at most %i may be queued",
+				static_cast<int>(factoryMgr->GetTasks().size()), static_cast<int>(MAX_FACTORY_QUEUE));
+	}
 	auto isFactoryFor = [&](CCircuitUnit* u) {
 		return (u != nullptr) && (factoryMgr->GetFactoryDefs().count(u->GetCircuitDef()->GetId()) > 0)
 			&& u->GetCircuitDef()->CanBuild(buildDef);
@@ -355,6 +421,10 @@ std::string CBrainServer::CmdUnits(const Json::Value& msg, CJsonOut& result)
 	if (!needsPos && (action != "stop") && (action != "retreat") && (action != "release")) {
 		return "action must be move, fight, stop, retreat or release";
 	}
+	int seconds;
+	if (!ReadSeconds(msg, DEFAULT_CONTROL_SECONDS, MAX_CONTROL_SECONDS, seconds)) {
+		return utils::string_format("seconds must be an integer within [1, %i]", MAX_CONTROL_SECONDS);
+	}
 
 	const int frame = circuit->GetLastFrame();
 	const bool needsMobile = needsPos || (action == "retreat");
@@ -391,11 +461,12 @@ std::string CBrainServer::CmdUnits(const Json::Value& msg, CJsonOut& result)
 			if (!isPlayer) {
 				circuit->UnitControl(unit, false);
 			}
-			controlled.insert(unit->GetId());
+			const int until = frame + seconds * FRAMES_PER_SEC;
+			controlled[unit->GetId()] = until;
 			if (action == "move") {
-				unit->CmdMoveTo(pos, 0, frame + FRAMES_PER_SEC * 60 * 10);
+				unit->CmdMoveTo(pos, 0, until);
 			} else if (action == "fight") {
-				unit->CmdFightTo(pos, 0, frame + FRAMES_PER_SEC * 60 * 10);
+				unit->CmdFightTo(pos, 0, until);
 			} else {
 				unit->CmdStop();
 			}
@@ -411,7 +482,12 @@ std::string CBrainServer::CmdFocus(const Json::Value& msg)
 	CMilitaryManager* militaryMgr = circuit->GetMilitaryManager();
 	if (msg.get("clear", false).asBool()) {
 		militaryMgr->ClearFocus();
+		focusUntil = -1;
 		return "";
+	}
+	int seconds;
+	if (!ReadSeconds(msg, DEFAULT_FOCUS_SECONDS, MAX_FOCUS_SECONDS, seconds)) {
+		return utils::string_format("seconds must be an integer within [1, %i]", MAX_FOCUS_SECONDS);
 	}
 	AIFloat3 pos;
 	if (!ReadPos(msg, pos)) {
@@ -425,6 +501,7 @@ std::string CBrainServer::CmdFocus(const Json::Value& msg)
 		}
 	}
 	militaryMgr->SetFocus(pos, radius, msg.get("force", false).asBool());
+	focusUntil = circuit->GetLastFrame() + seconds * FRAMES_PER_SEC;
 	return "";
 }
 
@@ -454,18 +531,14 @@ void CBrainServer::WriteControl(CJsonOut& js) const
 	js.Key("focus");
 	if (focus.isActive) {
 		js.BeginObj().Field("x", focus.pos.x).Field("z", focus.pos.z)
-			.Field("radius", focus.radius).Field("force", focus.isForce).EndObj();
+			.Field("radius", focus.radius).Field("force", focus.isForce).Field("until", focusUntil).EndObj();
 	} else {
 		js.Null();
 	}
+	// [unitId, frame it returns to the AI]; pruned every frame by ExpireControl
 	js.Key("controlled").BeginArr();
-	for (int id : controlled) {
-		CCircuitUnit* unit = circuit->GetTeamUnit(id);
-		if ((unit != nullptr) && !unit->IsDead() && (unit->GetTask() != nullptr)
-			&& (unit->GetTask()->GetType() == IUnitTask::Type::PLAYER))
-		{
-			js.Val(id);
-		}
+	for (const auto& kv : controlled) {
+		js.BeginArr().Val(kv.first).Val(kv.second).EndArr();
 	}
 	js.EndArr();
 	js.EndObj();

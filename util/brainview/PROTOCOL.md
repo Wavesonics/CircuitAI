@@ -87,8 +87,10 @@ Reply to every `cmd`: `{t, id?, op, ok, error?, result, control}`.
   - `tuning`: `{key: value}` for every tunable
   - `changed`: `{key: originalValue}` for tunables changed since the last reset
   - `limits`: `[defId, limit, originalLimit]` for unit limits changed
-  - `focus`: `{x, z, radius, force}` or null
-  - `controlled`: ids of units taken out of the AI's hands by `units` orders
+  - `focus`: `{x, z, radius, force, until}` or null; `until` is the frame it
+    lapses
+  - `controlled`: `[unitId, until]` for units taken out of the AI's hands by
+    `units` orders; `until` is the frame they return to the AI
 
 ### `error`
 `{t, error}` in reply to a malformed or unknown client message.
@@ -110,24 +112,27 @@ Reply to every `cmd`: `{t, id?, op, ok, error?, result, control}`.
       before it attacks), `quota.raidMin`, `quota.raidAvg` (0..10000)
     - `role.<role>.maxPercent` (0..1): cap on that role's share of the army
     - `role.<role>.factor` (0..100): how readily that role is built in response
-  - `reset` `{key?}`: restore one tunable, or with no key every tunable and
-    unit limit.
+  - `reset` `{key?}`: restore one tunable, or with no key undo everything:
+    tunables, unit limits, the attack focus and units under control.
   - `limit` `{def, limit}`: cap how many of a unit the AI may have; 0 bans it,
     `null` restores the original.
   - `build` `{def, x, z, type?}`: queue a structure at top priority. `type` is
-    inferred when omitted (factory, nano, store, energy, geo, defence, bunker,
+    inferred when omitted (factory, nano, store, energy, defence, bunker,
     big_gun, radar, sonar, convert, mex). Mex orders snap to the nearest free
     metal spot. Result: `{type, pos}`.
   - `recruit` `{def, count?, factory?}`: queue 1-20 units at high priority, at
-    the given factory unit or the first one that can build them. Result:
-    `{factory}`.
-  - `units` `{action, units, x?, z?}`: `move`, `fight` (attack-move) and `stop`
-    take the units out of the AI's control until `release`; `retreat` hands
+    the given factory unit or the first one that can build them. Queued units
+    are built before the AI's own picks, so the queue is capped at 20 in
+    total. Result: `{factory}`.
+  - `units` `{action, units, x?, z?, seconds?}`: `move`, `fight`
+    (attack-move) and `stop` take the units out of the AI's control for
+    `seconds` (default 120, at most 1800) or until `release`; `retreat` hands
     them back to the AI and sends them to retreat. Structures are skipped for
     move, fight and retreat. Result: `{applied: [ids]}`.
-  - `focus` `{x, z, radius?, force?}` or `{clear: true}`: attack squads only
-    pick enemies within `radius` (default 1000) of the point, nearest to it
-    first, and travel there when none are around. `force` also ignores the
+  - `focus` `{x, z, radius?, force?, seconds?}` or `{clear: true}`: for
+    `seconds` (default 300, at most 3600), attack squads only pick enemies
+    within `radius` (default 1000) of the point, nearest to it first, and
+    travel there when none are around. `force` also ignores the
     squad-strength check. Defending squads are not affected.
 
 Tuning changes apply from the AI's next decision. Nothing persists between

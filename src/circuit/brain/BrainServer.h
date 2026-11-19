@@ -15,7 +15,6 @@
 #include <functional>
 #include <map>
 #include <memory>
-#include <set>
 #include <string>
 #include <vector>
 
@@ -90,6 +89,8 @@ private:
 	std::string CmdRecruit(const Json::Value& msg, CJsonOut& result);
 	std::string CmdUnits(const Json::Value& msg, CJsonOut& result);
 	std::string CmdFocus(const Json::Value& msg);
+	void ReleaseAll();
+	void ExpireControl(int frame);
 	void WriteControl(CJsonOut& js) const;
 
 	// BrainSnapshot.cpp
@@ -111,7 +112,8 @@ private:
 	std::map<std::string, STunable> tunables;
 	std::map<std::string, float> tunedFrom;  // tunable key: value before the first change
 	std::map<int, int> limitedFrom;  // def id: unit limit before the first change
-	std::set<int> controlled;  // unit ids taken out of AI control by commands
+	std::map<int, int> controlled;  // unit id: frame it returns to the AI
+	int focusUntil = -1;  // frame the attack focus expires
 
 	int stateInterval;  // frames between state snapshots
 	int lastStateFrame;

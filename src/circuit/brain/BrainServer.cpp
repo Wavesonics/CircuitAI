@@ -160,6 +160,7 @@ void CBrainServer::Update(int frame)
 		Read(c);
 	}
 
+	ExpireControl(frame);
 	SendStates(frame);
 
 	for (SClient& c : clients) {
