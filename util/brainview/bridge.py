@@ -46,6 +46,7 @@ class AILink:
         self.state = None  # raw JSON line
         self.decisions = collections.deque(maxlen=RECENT_DECISIONS)
         self.subscribers = set()
+        self.waiters = {}  # command id: [threading.Event, ack dict or None]
         threading.Thread(target=self._run, name=f"ai-{port}", daemon=True).start()
 
     @property
@@ -81,6 +82,20 @@ class AILink:
             return True
         except OSError:
             return False
+
+    def request(self, obj, timeout=5.0):
+        """Sends a command with obj["id"] set and returns its ack dict, or None
+        if the AI is not connected or does not answer in time."""
+        waiter = [threading.Event(), None]
+        with self.lock:
+            self.waiters[obj["id"]] = waiter
+        try:
+            if not self.send(obj) or not waiter[0].wait(timeout):
+                return None
+            return waiter[1]
+        finally:
+            with self.lock:
+                self.waiters.pop(obj["id"], None)
 
     def _publish(self, kind, line):
         with self.lock:
@@ -144,9 +159,18 @@ class AILink:
                     self.decisions.append(line)
                 self._publish("decision", line)
             elif kind in ("ack", "error"):
+                if kind == "ack":
+                    self._resolve(json.loads(line))
                 # Replies to commands; every viewer of this AI sees them. SSE
                 # reserves "error" for connection errors, so it is renamed.
                 self._publish("aierror" if kind == "error" else kind, line)
+
+    def _resolve(self, ack):
+        with self.lock:
+            waiter = self.waiters.get(ack.get("id"))
+        if waiter is not None:
+            waiter[1] = ack
+            waiter[0].set()
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
