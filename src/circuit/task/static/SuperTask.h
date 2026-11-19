@@ -25,6 +25,7 @@ public:
 
 	// Script hooks
 	void SetTargetPos(const springai::AIFloat3& pos);
+	const springai::AIFloat3& GetTargetPos() const { return targetPos; }
 
 private:
 	void ExecuteAttack(CCircuitUnit* unit);

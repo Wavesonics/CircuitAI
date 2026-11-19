@@ -45,6 +45,7 @@ constexpr size_t MAX_READ_PER_UPDATE = 256 * 1024;
 constexpr size_t STATE_SKIP_BACKLOG = 8 * 1024 * 1024;
 // A client this far behind is assumed stuck and is dropped
 constexpr size_t MAX_BACKLOG = 64 * 1024 * 1024;
+constexpr size_t MAX_RECENT_EVENTS = 200;  // replayed to each new client
 
 bool IsEnabled()
 {
@@ -161,6 +162,7 @@ void CBrainServer::Update(int frame)
 	}
 
 	ExpireControl(frame);
+	UpdateEvents(frame);
 	SendStates(frame);
 
 	for (SClient& c : clients) {
@@ -202,6 +204,25 @@ void CBrainServer::EndTrace(const CDecisionRecord* record)
 		if (c.Backlog() < STATE_SKIP_BACKLOG) {
 			Send(c, line);
 		}
+	}
+}
+
+void CBrainServer::Emit(std::string&& line)
+{
+	for (SClient& c : clients) {
+		if (c.Backlog() < STATE_SKIP_BACKLOG) {
+			Send(c, line);
+		}
+	}
+	const bool isCommanderDeath = (line.find(R"("kind":"keyDeath")") != std::string::npos)
+			&& (line.find(R"("category":"commander")") != std::string::npos);
+	if (isCommanderDeath || (line.find(R"("kind":"teamEliminated")") != std::string::npos))
+	{
+		keyEvents.push_back(line);
+	}
+	recentEvents.push_back(std::move(line));
+	if (recentEvents.size() > MAX_RECENT_EVENTS) {
+		recentEvents.pop_front();
 	}
 }
 
@@ -247,6 +268,15 @@ void CBrainServer::Accept()
 		SClient& c = clients.back();
 		Send(c, MakeHello());
 		Send(c, GetMeta());
+		// Key events that fell out of the recent window first, so the replay stays in order
+		for (const std::string& line : keyEvents) {
+			if (std::find(recentEvents.begin(), recentEvents.end(), line) == recentEvents.end()) {
+				Send(c, line);
+			}
+		}
+		for (const std::string& line : recentEvents) {
+			Send(c, line);
+		}
 	}
 #endif
 }

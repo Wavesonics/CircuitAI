@@ -7,7 +7,7 @@ state and recent decisions per AI, and serves the viewer:
   GET  /                      viewer (web/)
   GET  /api/ais               connected AIs and their hello info
   GET  /api/meta?port=N       meta for one AI
-  GET  /events?port=N         Server-Sent Events: state and decision messages
+  GET  /events?port=N         Server-Sent Events: state, decision and event messages
   POST /api/send?port=N       forward one JSON object to the AI; replies
                               (ack, error) arrive on /events
 
@@ -28,6 +28,7 @@ import urllib.parse
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 RECENT_DECISIONS = 300
+RECENT_EVENTS = 300
 SUBSCRIBER_QUEUE = 256
 RECONNECT_SECONDS = 2.0
 HEARTBEAT_SECONDS = 15.0
@@ -45,6 +46,8 @@ class AILink:
         self.meta = None  # raw JSON line
         self.state = None  # raw JSON line
         self.decisions = collections.deque(maxlen=RECENT_DECISIONS)
+        self.events = collections.deque(maxlen=RECENT_EVENTS)  # raw "event" lines
+        self.key_events = []  # commander deaths and eliminations, kept all game
         self.subscribers = set()
         self.waiters = {}  # command id: [threading.Event, ack dict or None]
         threading.Thread(target=self._run, name=f"ai-{port}", daemon=True).start()
@@ -59,10 +62,11 @@ class AILink:
             # Late joiners get the current picture first
             if self.state is not None:
                 q.put_nowait(("state", self.state))
-            for line in self.decisions:
-                if q.full():
-                    break
-                q.put_nowait(("decision", line))
+            for kind, lines in (("event", self.events), ("decision", self.decisions)):
+                for line in lines:
+                    if q.full():
+                        break
+                    q.put_nowait((kind, line))
             self.subscribers.add(q)
         return q
 
@@ -127,6 +131,8 @@ class AILink:
                 self.meta = None
                 self.state = None
                 self.decisions.clear()
+                self.events.clear()
+                self.key_events.clear()
             sock.close()
             self._publish("status", json.dumps({"t": "status", "connected": False}))
             time.sleep(RECONNECT_SECONDS)
@@ -158,6 +164,14 @@ class AILink:
                 with self.lock:
                     self.decisions.append(line)
                 self._publish("decision", line)
+            elif kind == "event":
+                # The AI replays its recent events to each new connection
+                with self.lock:
+                    self.events.append(line)
+                    if ('"kind":"keyDeath"' in line and '"category":"commander"' in line
+                            or '"kind":"teamEliminated"' in line):
+                        self.key_events.append(line)
+                self._publish("event", line)
             elif kind in ("ack", "error"):
                 if kind == "ack":
                     self._resolve(json.loads(line))

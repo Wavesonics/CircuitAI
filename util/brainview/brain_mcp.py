@@ -28,6 +28,9 @@ SERVER_VERSION = "0.1.0"
 PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 FPS = 30
 SECTOR_COLS = 8  # map is cut into SECTOR_COLS columns of square sectors
+ALERT_SECONDS = 180  # how far back get_overview's alerts reach
+ATTACK_ALERT_SECONDS = 60  # ... for under-attack reports, which are frequent
+DEF_NUKE, DEF_ANTI = 1, 2  # meta defs flags
 
 INSTRUCTIONS = """\
 Tools for watching and steering BARb, the Beyond All Reason AI, in a live game.
@@ -35,7 +38,11 @@ BARb plays on its own; you act as its strategist. Start with list_ais, then
 get_overview. Positions are world coordinates [x, z] in elmos, with x growing
 east and z growing south, plus a sector name like "C7" (letter = column from
 the west, number = row from the north). Game time advances while you think, so
-prefer a few decisive changes over many small ones."""
+prefer a few decisive changes over many small ones. get_overview's alerts list
+commander and other key unit deaths, attacks on our units, nuke hits and
+launches, and sudden heavy losses: read them every check-in, because a squad
+that vanished was more likely destroyed than retreating, and a unit missing
+from the enemy list may be dead."""
 
 
 def clock(frame):
@@ -61,6 +68,7 @@ class Game:
         self.link = link
         self._meta = (None, None)
         self._state = (None, None)
+        self._events = {}  # raw line: parsed event
 
     def meta(self):
         raw = self.link.meta
@@ -78,11 +86,22 @@ class Game:
             self._state = (raw, json.loads(raw))
         return self._state[1]
 
+    def events(self):
+        """Parsed events, oldest first."""
+        with self.link.lock:  # the reader thread appends concurrently
+            raw = list(self.link.key_events) + list(self.link.events)
+        parsed = {}
+        for line in raw:
+            parsed[line] = self._events.get(line) or json.loads(line)
+        self._events = parsed
+        return sorted(parsed.values(), key=lambda e: (e["frame"], e["seq"]))
+
     def defs(self):
         meta = self.meta()
         if "_defs" not in meta:
             meta["_defs"] = {d[0]: {"name": d[1], "role": meta["roles"][d[2]] if d[2] < len(meta["roles"]) else "?",
-                                    "cost": d[3], "mobile": d[4] if len(d) > 4 else True} for d in meta["defs"]}
+                                    "cost": d[3], "mobile": d[4] if len(d) > 4 else True,
+                                    "flags": d[5] if len(d) > 5 else 0} for d in meta["defs"]}
         return meta["_defs"]
 
     def def_name(self, def_id):
@@ -223,8 +242,18 @@ class Server:
         roles.sort(key=lambda r: -max(r["ours"], r["enemy"]))
 
         c = st.get("control") or {}
+        events = g.events()
+        alerts = self._alerts(g, events, st["frame"])
+        deaths = [self._event_text(g, e) for e in events if self.EVENT_KINDS["commander"](e)]
         return {
             "gameTime": clock(st["frame"]),
+            # Whole game: with deathmode "com" a commander death decides a team's fate
+            "commanderDeaths": deaths or ("none seen" if "silos" in st
+                                          else "not reported: this AI build predates brain protocol 2"),
+            "ourCommandersAlive": sum(1 for u in st["units"] if g.defs().get(u[1], {}).get("role") == "commander"),
+            # Newest last; get_events has the details and older ones
+            "alerts": (alerts if alerts else f"none in the last {ALERT_SECONDS // 60} minutes")
+                      if "silos" in st else "not reported: this AI build predates brain protocol 2",
             "map": {"name": m["name"], "width": m["width"], "height": m["height"],
                     "sectors": f"{SECTOR_COLS} columns A-{chr(ord('A') + SECTOR_COLS - 1)} of "
                                f"{round(g.sector_size())} elmos; rows numbered from the north"},
@@ -244,6 +273,7 @@ class Server:
             "squads": squads[:10],
             "buildJobs": {"active": dict(jobs), "waitingForBuilder": dict(idle_jobs)},
             "factoryQueue": queue,
+            "nukes": self._nukes(g, st),
             "enemies": {
                 "known": len(enemies), "inSight": seen, "radarOnly": radar,
                 "unseenAttackers": inferred,
@@ -408,6 +438,197 @@ class Server:
         groups = [self._group(g, gr) for gr in sorted(st["groups"], key=lambda gr: -gr[3]) if gr[5]]
         return {"known": len(out), "closestToOurBaseFirst": out[:limit], "truncated": len(out) > limit,
                 "unseenAttackers": unseen, "groups": groups}
+
+    # -- events
+
+    @staticmethod
+    def _is_alert(e):
+        if e["kind"] in ("launch", "intercept", "keyDeath", "teamEliminated", "keyUnderAttack"):
+            return True
+        if e["kind"] == "blast":
+            return e["class"] == "nuke" or e["oursKilled"] > 0
+        if e["kind"] == "losses":
+            return e["massCasualty"]
+        if e["kind"] == "underAttack":
+            # Not our own attackers trading, nor a lone scout or raider being chased
+            return e["offensive"] < e["damaged"] and (e["structures"] > 0 or e["damaged"] >= 3)
+        return False
+
+    def _alerts(self, g, events, frame, cap=15):
+        """Alert lines, newest last. Under-attack reports are kept shorter and only the latest per
+        sector or unit, so a long fight does not crowd out the rest."""
+        picked, seen = [], set()
+        for e in reversed(events):
+            frequent = e["kind"] in ("underAttack", "keyUnderAttack")
+            age = (frame - e["frame"]) / FPS
+            if age > (ATTACK_ALERT_SECONDS if frequent else ALERT_SECONDS) or not self._is_alert(e):
+                continue
+            if frequent:
+                key = (e["kind"], e["unit"] if e["kind"] == "keyUnderAttack" else g.sector(*e["pos"]))
+                if key in seen:
+                    continue
+                seen.add(key)
+            picked.append(e)
+            if len(picked) >= cap:
+                break
+        return [self._event_text(g, e) for e in reversed(picked)]
+
+    @staticmethod
+    def _counts(g, pairs, top=3):
+        return ", ".join(f"{n} {g.def_name(d) if d >= 0 else 'unseen'}" for d, n in pairs[:top])
+
+    def _event_text(self, g, e):
+        at = g.pos(e.get("pos"))["sector"] if e.get("pos") else "?"
+        t = clock(e["frame"])
+        kind = e["kind"]
+        if kind == "blast":
+            who = {"ours": "our own", "ally": "an allied", "enemy": "an enemy", "unknown": "an unattributed"}[e["side"]]
+            by = g.def_name(e["attackerDef"]) if e.get("attackerDef", -1) >= 0 else None
+            if e["side"] == "enemy" and not e["attackerSeen"]:
+                who += " with an unseen launcher"
+            elif by:
+                who += f" {by}"
+            what = "NUKE" if e["class"] == "nuke" else ("EMP blast" if e["paralyzer"] else "large blast")
+            hit = []
+            if e["oursHit"]:
+                hit.append(f"{e['oursHit']} of our units hit, {e['oursKilled']} destroyed "
+                           f"({round(e['oursKilledCost'])} metal)")
+            if e["enemyHit"]:
+                hit.append(f"{e['enemyHit']} enemy units hit")
+            return f"{t} {what} at {at} from {who} ({e['weapon']}): {'; '.join(hit) or 'no units hit'}"
+        if kind == "losses":
+            secs = max(1, round((e["endFrame"] - e["frame"]) / FPS))
+            label = "MASS CASUALTY" if e["massCasualty"] else "losses"
+            causes = ", ".join(f"{n} to {w}{' (' + c + ')' if c else ''}" for w, n, c in e["weapons"][:3])
+            return (f"{t} {label} at {at}: {e['count']} of our units destroyed ({round(e['cost'])} metal) over {secs} s, "
+                    f"up to {e['peak5s']} within 5 s. Lost: {self._counts(g, e['units'])}. Causes: {causes}. "
+                    f"Killers: {self._counts(g, e['attackers'])}")
+        if kind == "keyDeath":
+            whose = {"ours": "OUR", "ally": "ALLIED", "enemy": "ENEMY"}.get(e["side"], e["side"].upper())
+            what = "COMMANDER KILLED" if e["category"] == "commander" else f"{e['category'].upper()} DESTROYED"
+            text = f"{t} {whose} {what}: {g.def_name(e['def'])} of team {e['team']} at {at}"
+            if e["killerDef"] >= 0:
+                owner = {"ours": "our", "ally": "an allied", "enemy": "an enemy"}.get(e["killerSide"], "a")
+                team = f" (team {e['killerTeam']})" if e.get("killerTeam", -1) >= 0 else ""
+                text += f", killed by {owner} {g.def_name(e['killerDef'])}{team}"
+            elif e["side"] == "ally":
+                text += " (noticed missing from the allied units; the AI is not told who killed it)"
+            else:
+                text += ", killer not seen"
+            if e.get("weapon"):
+                text += f" with {e['weapon']}"
+            if e["commandersLeft"] >= 0:
+                text += f"; team {e['team']} has {e['commandersLeft']} commander(s) left"
+            return text
+        if kind == "keyUnderAttack":
+            by = (g.def_name(e["attackerDef"]) if e["attackerDef"] >= 0 else "an unidentified unit") \
+                if e["attackerSeen"] else "an unseen attacker"
+            weapon = f" ({e['weapon']})" if e.get("weapon") else ""
+            return (f"{t} OUR {e['category'].upper()} UNDER ATTACK: {g.def_name(e['def'])} at {at}, "
+                    f"health {round(e['health'] * 100)}%, hit by {by}{weapon}")
+        if kind == "underAttack":
+            secs = max(1, round((e["endFrame"] - e["frame"]) / FPS))
+            seen = self._counts(g, [p for p in e["attackers"] if p[0] >= 0], top=4)
+            unknown = sum(n for d, n in e["attackers"] if d < 0)
+            who = [s for s in (seen, f"{unknown} unidentified" if unknown else "",
+                               f"{e['unseenHits']} hits from unseen attackers" if e["unseenHits"] else "") if s]
+            if e["offensive"] == e["damaged"]:
+                label = "our attacking squads are trading"
+            else:
+                label = "UNDER ATTACK"
+            return (f"{t} {label} in {at} for {secs} s: {e['damaged']} of our units damaged "
+                    f"({e['structures']} structures, {e['offensive']} in our attack or raid squads): "
+                    f"{self._counts(g, e['units'], top=4)}. Attackers: {', '.join(who) or 'unknown'}")
+        if kind == "teamEliminated":
+            who = {"ours": "OUR team", "ally": "allied team", "enemy": "enemy team"}.get(e["side"], "team")
+            return (f"{t} TEAM ELIMINATED: {who} {e['team']} ({e['reason']}; under deathmode com that "
+                    f"ends the team)")
+        if kind == "launch":
+            target = f"toward {g.pos(e['target'])['sector']}" if e.get("target") else "target unknown"
+            return (f"{t} we launched {e['shots']} nuke(s) from {g.def_name(e['def'])} at {at}, {target}; "
+                    f"{e['stockpile']} left in stock")
+        if kind == "intercept":
+            return (f"{t} our antinuke {g.def_name(e['def'])} at {at} fired {e['shots']} interceptor(s): "
+                    f"an enemy nuke was coming down within its cover ({e['stockpile']} left in stock)")
+        return f"{t} {kind} at {at}"
+
+    def _nukes(self, g, st):
+        defs = g.defs()
+        ours = {"silos": [], "antiNukes": []}
+        for uid, did, x, z, flags, stock, queued, finished in st.get("silos", []):
+            entry = {"id": uid, "unit": g.def_name(did), "at": g.pos([x, z]), "stockpile": stock}
+            if not finished:
+                entry["underConstruction"] = True
+            ours["silos" if flags & DEF_NUKE else "antiNukes"].append(entry)
+        enemy = {"silos": [], "antiNukes": []}
+        for e in st["enemies"]:
+            flags = defs.get(e[1], {}).get("flags", 0)
+            if e[0] >= 0 and flags:
+                enemy["silos" if flags & DEF_NUKE else "antiNukes"].append(
+                    {"unit": g.def_name(e[1]), "at": g.pos(e[2:4])})
+        out = {"ours": ours, "enemySeen": enemy}
+        if "silos" not in st:
+            out["note"] = "this AI build does not report silos or nuke events"
+        return out
+
+    EVENT_KINDS = {"nuke": lambda e: e["kind"] == "blast" and e["class"] == "nuke",
+                   "blast": lambda e: e["kind"] == "blast",
+                   "losses": lambda e: e["kind"] == "losses",
+                   "launch": lambda e: e["kind"] == "launch",
+                   "intercept": lambda e: e["kind"] == "intercept",
+                   "commander": lambda e: (e["kind"] == "keyDeath" and e["category"] == "commander"
+                                           or e["kind"] == "teamEliminated"),
+                   "key": lambda e: e["kind"] in ("keyDeath", "teamEliminated"),
+                   "attack": lambda e: e["kind"] in ("underAttack", "keyUnderAttack")}
+
+    def t_get_events(self, args):
+        g = self.game(args)
+        st = g.state()
+        kind = args.get("kind")
+        if kind and kind not in self.EVENT_KINDS:
+            raise ToolError(f"kind must be one of {sorted(self.EVENT_KINDS)}")
+        since = float(args.get("since_seconds", 1e9 if kind in ("commander", "key") else 600))
+        limit = max(1, min(int(args.get("limit", 20)), 100))
+        out = []
+        for e in reversed(g.events()):
+            if e["frame"] < st["frame"] - since * FPS:
+                break
+            if kind and not self.EVENT_KINDS[kind](e):
+                continue
+            item = {"gameTime": clock(e["frame"]), "kind": e["kind"], "at": g.pos(e.get("pos")),
+                    "summary": self._event_text(g, e)}
+            if e["kind"] == "blast":
+                item.update({"class": e["class"], "side": e["side"], "weapon": e["weapon"],
+                             "fromUnitType": g.def_name(e["sourceDef"]) if e["sourceDef"] >= 0 else None,
+                             "ourUnitsHit": e["oursHit"], "ourUnitsKilled": e["oursKilled"],
+                             "metalLost": round(e["oursKilledCost"]), "enemyUnitsHit": e["enemyHit"]})
+            elif e["kind"] == "losses":
+                item.update({"until": clock(e["endFrame"]), "unitsLost": e["count"], "metalLost": round(e["cost"]),
+                             "massCasualty": e["massCasualty"],
+                             "lost": {g.def_name(d): n for d, n in e["units"]}})
+            elif e["kind"] == "launch":
+                item["target"] = g.pos(e.get("target"))
+            elif e["kind"] == "keyDeath":
+                item.update({"category": e["category"], "side": e["side"], "unit": g.def_name(e["def"]),
+                             "team": e["team"], "allyTeam": e["allyTeam"],
+                             "killer": ({"side": e["killerSide"], "unit": g.def_name(e["killerDef"]),
+                                         "team": e["killerTeam"]} if e["killerDef"] >= 0 else None)})
+                if e["commandersLeft"] >= 0:
+                    item["commandersLeftOnTeam"] = e["commandersLeft"]
+            elif e["kind"] == "underAttack":
+                item.update({"until": clock(e["endFrame"]), "damaged": e["damaged"],
+                             "structures": e["structures"], "inOurAttackSquads": e["offensive"],
+                             "attackers": {g.def_name(d) if d >= 0 else "unidentified": n for d, n in e["attackers"]},
+                             "unseenHits": e["unseenHits"]})
+            out.append(item)
+            if len(out) >= limit:
+                break
+        if not out and "silos" not in st:
+            return {"events": [], "note": "this AI build does not report events; it needs brain protocol 2"}
+        return {"events": out, "note": "newest first. Loss bursts are our units destroyed close together "
+                                       "(4+ units or 1000+ metal); massCasualty means 6+ units or 3000+ metal "
+                                       "within 5 s. Enemy nukes are only seen where they hit us or when our "
+                                       "antinuke fires."}
 
     def t_get_decisions(self, args):
         g = self.game(args)
@@ -685,9 +906,28 @@ def tool(name, description, properties=None, required=()):
 
 tool("list_ais", "List the BARb AIs currently streaming, with their port, team and game time.")(Server.t_list_ais)
 tool("get_overview",
-     "One-call summary of the AI's situation: economy, our units and army by role, active squads and their "
-     "targets, build jobs, factory queue, what is known about the enemy, and any changes you have made.")(
+     "One-call summary of the AI's situation: every commander death this game (ours, allies', enemies'), "
+     "alerts (key unit deaths and attacks on them, units under attack by sector, nuke hits and launches, "
+     "antinuke shots, mass casualties; the last 3 minutes, attacks the last minute), economy, our units and army by role, active squads and their targets, build "
+     "jobs, factory queue, nuke silos and antinukes (ours with stockpile, and the enemy's we have seen), what "
+     "is known about the enemy, and any changes you have made.")(
     Server.t_get_overview)
+tool("get_events",
+     "Recent combat events, newest first: deaths of key units (commanders, experimentals, factories, "
+     "superweapons, big defences and economy; ours, allied, and enemy ones in our sight or radar, with the "
+     "killer when seen), teams losing their last commander, our units under attack (one report per sector "
+     "per 25 s; key units at once), nuke impacts and other large blasts that hit our units (with who "
+     "fired, units hit and destroyed), bursts of our own losses in one area (flagged massCasualty when many "
+     "die within seconds, whatever the cause), our nuke launches with their target, and our antinukes "
+     "firing at incoming enemy nukes.",
+     {"kind": {"type": "string", "enum": ["commander", "key", "attack", "nuke", "blast", "losses", "launch",
+                                          "intercept"],
+               "description": "only this kind: commander (commander deaths, team eliminations), key (all key "
+                              "unit deaths), attack (under-attack reports), nuke (nuke blasts), blast, losses, "
+                              "launch, intercept"},
+      "since_seconds": {"type": "number", "description": "how far back, in game seconds; default 600, or the "
+                                                          "whole game for kinds commander and key"},
+      "limit": {"type": "integer", "description": "1-100, default 20"}})(Server.t_get_events)
 tool("get_map",
      "The map as a small sector grid (one character per sector) for one layer of the AI's world model. "
      "Use it to see the front line (influence) or where it is dangerous (threat).",

@@ -320,7 +320,7 @@ pkill -f "[i]nstall/spring-headless"   # stop headless ones
   `hello` yet. That is expected.
 - Protocol: newline-delimited JSON, see [PROTOCOL.md](PROTOCOL.md). On connect
   the AI sends `hello` and `meta` (map, heightmap, unit defs, metal spots),
-  then a `state` every second, plus `decision` traces. Clients send `cfg`,
+  then a `state` every second, plus `decision` traces and `event` messages. Clients send `cfg`,
   `meta` and `cmd` (steering), and each `cmd` is answered by an `ack`.
 - Decision tracing is rate-limited per kind (factory, builder, attackTarget,
   retreat) at 40 per second; `state.droppedDecisions` counts what was skipped.
@@ -332,6 +332,7 @@ Code map (BARb, `src/circuit/`):
 | `brain/BrainServer.*` | sockets, clients, message dispatch, trace budget |
 | `brain/BrainSnapshot.cpp` | `meta` and `state` serialization |
 | `brain/BrainControl.cpp` | `cmd` ops: tunables, limits, build, recruit, unit orders, focus |
+| `brain/BrainEvents.cpp`, `BrainAlerts.cpp`, `BrainEventUtil.h` | `event` messages: key unit deaths, attacks, nukes, blasts, loss bursts |
 | `brain/DecisionTrace.*` | decision records and the `CTraceScope` used by hooks |
 | `brain/JsonOut.h` | streaming JSON writer |
 | `module/FactoryManager.cpp`, `BuilderManager.cpp`, `task/fighter/AttackTask.cpp`, `FighterTask.cpp` | decision trace hooks |
@@ -390,7 +391,8 @@ connected):
 | Tool | Does |
 |---|---|
 | `list_ais` | AIs streaming now, with port, team, game time |
-| `get_overview` | one-call summary: economy, units and army by role, squads (position, size, composition, target, "gathering (becomes X at power Y)"), build jobs, factory queue, known enemy, your active changes |
+| `get_overview` | one-call summary: economy, units and army by role, squads (position, size, composition, target, "gathering (becomes X at power Y)"), build jobs, factory queue, known enemy, your active changes; plus `commanderDeaths` (every commander death this game), `alerts` (key unit deaths and attacks on them, sectors under attack, nuke hits and launches, antinuke shots, mass casualties) and `nukes` (our silos and antinukes with stockpiles, enemy ones we have seen) |
+| `get_events` | recent combat events, newest first, filterable by kind: `commander`, `key`, `attack`, `nuke`, `blast`, `losses`, `launch`, `intercept` |
 | `get_map` | a layer (influence, threat, ...) as a sector grid; `#` marks the front |
 | `get_units` | own units, filterable; shows squad ids and structures |
 | `get_enemies` | known enemies with "last seen N s ago" and attackers inferred from damage |
@@ -411,10 +413,12 @@ The game keeps running while the model thinks, so the LLM works best as a
 strategist that checks in every 30-60 seconds and leaves the fast decisions to
 BARb.
 
-Work in progress on `brain-view` (may not be committed yet when you read this):
-a `get_events` tool and `alerts` in `get_overview` (commander and key unit
-deaths, units under attack, nukes, mass casualties). Check `README.md` for the
-current tool list.
+Limits of the events: a skirmish AI cannot see projectiles or enemy weapon
+fire, so an enemy nuke shows up only where it hits us or when our antinuke
+fires at it. The engine does not report allied deaths (a key allied unit is
+reported when it leaves the allied unit list, with no killer), enemy deaths
+only count inside our radar or sight, and enemy team elimination is not
+detectable.
 
 ## 8. Playing online with friends
 

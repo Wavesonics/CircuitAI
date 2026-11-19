@@ -173,7 +173,7 @@ const std::string& CBrainServer::GetMeta()
 	}
 	js.EndArr();
 
-	// [id, name, mainRole, metalCost, isMobile]
+	// [id, name, mainRole, metalCost, isMobile, flags, category]
 	js.Key("defs").BeginArr();
 	for (CCircuitDef& cdef : circuit->GetCircuitDefs()) {
 		js.BeginArr()
@@ -182,6 +182,8 @@ const std::string& CBrainServer::GetMeta()
 			.Val(static_cast<int>(cdef.GetMainRole()))
 			.Val(cdef.GetCostM())
 			.Val(cdef.IsMobile())
+			.Val(static_cast<int>(DefFlagsOf(cdef.GetId())))
+			.Val(static_cast<int>(CategoryOf(cdef.GetId())))
 		.EndArr();
 	}
 	js.EndArr();
@@ -234,6 +236,7 @@ std::string CBrainServer::MakeState(int frame)
 
 	WriteEconomy(js);
 	WriteUnits(js, frame);
+	WriteSilos(js, frame);
 	WriteTasks(js);
 	WriteEnemies(js);
 	WriteLayers(js);

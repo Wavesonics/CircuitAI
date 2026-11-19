@@ -70,8 +70,14 @@ Register it with Claude Code, for example:
 claude mcp add barb-brain -- python3 /path/to/util/brainview/brain_mcp.py --ports 7710-7717
 ```
 
-Read tools: `list_ais`, `get_overview`, `get_map` (a layer as a sector grid),
-`get_units`, `get_enemies`, `get_decisions`, `get_tuning`. Control tools:
+Read tools: `list_ais`, `get_overview`, `get_events` (deaths of commanders and
+other key units, our units under attack, nuke hits and launches, antinuke
+shots, large blasts and bursts of our losses),
+`get_map` (a layer as a sector grid), `get_units`, `get_enemies`,
+`get_decisions`, `get_tuning`. `get_overview` lists every commander death of
+the game under `commanderDeaths`, recent key unit deaths, attacks, nukes and
+mass casualties under `alerts`, and our silos and antinukes with their stockpiles
+under `nukes`. Control tools:
 `set_tuning`, `reset`, `limit_unit`, `build`, `recruit`, `order_units`,
 `set_focus`, `clear_focus`. Positions are world `x, z` or sector names such as
 `C7` (columns A-H from the west, rows from the north).

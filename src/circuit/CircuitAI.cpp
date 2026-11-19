@@ -296,6 +296,9 @@ int CCircuitAI::HandleGameEvent(int topic, const void* data)
 			TRACY_TOPIC_UNIT("EVENT_UNIT_DAMAGED", UnitDamaged, evt->unit);
 
 			CCircuitUnit* unit = GetTeamUnit(evt->unit);
+			if ((unit != nullptr) && (brain != nullptr)) {
+				brain->OnUnitDamaged(unit, evt->attacker, evt->weaponDefId, evt->paralyzer);
+			}
 			ret = (unit != nullptr)
 					? this->UnitDamaged(unit, evt->attacker, evt->weaponDefId, AIFloat3(evt->dir_posF3))
 					: ERROR_UNIT_DAMAGED;
@@ -307,6 +310,9 @@ int CCircuitAI::HandleGameEvent(int topic, const void* data)
 			CEnemyInfo* attacker = GetEnemyInfo(evt->attacker);
 			CCircuitUnit* unit = GetTeamUnit(evt->unit);
 			if (unit != nullptr) {
+				if (brain != nullptr) {
+					brain->OnUnitDestroyed(unit, evt->attacker, evt->weaponDefID);
+				}
 				ret = this->UnitDestroyed(unit, attacker);
 				UnregisterTeamUnit(unit);
 			} else {
@@ -374,6 +380,9 @@ int CCircuitAI::HandleGameEvent(int topic, const void* data)
 
 			struct SEnemyDamagedEvent* evt = (struct SEnemyDamagedEvent*)data;
 			CEnemyInfo* enemy = GetEnemyInfo(evt->enemy);
+			if (brain != nullptr) {
+				brain->OnEnemyDamaged(enemy, evt->attacker, evt->weaponDefId);
+			}
 			ret = (enemy != nullptr) ? this->EnemyDamaged(enemy) : ERROR_ENEMY_DAMAGED;
 		} break;
 		case EVENT_ENEMY_DESTROYED: {
@@ -382,6 +391,9 @@ int CCircuitAI::HandleGameEvent(int topic, const void* data)
 			struct SEnemyDestroyedEvent* evt = (struct SEnemyDestroyedEvent*)data;
 			CEnemyInfo* enemy = GetEnemyInfo(evt->enemy);
 			if (enemy != nullptr) {
+				if (brain != nullptr) {
+					brain->OnEnemyDestroyed(enemy, evt->attacker);
+				}
 				allyTeam->DyingEnemy(enemy->GetData(), lastFrame);
 				ret = 0;
 			} else {
