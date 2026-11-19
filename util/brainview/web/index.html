@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BARb Brain View</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand">BARb <span>brain view</span></div>
+  <nav id="ai-tabs" class="tabs" aria-label="AI instances"></nav>
+  <div class="status">
+    <span id="conn" class="dot" title="connection"></span>
+    <span id="clock">--:--</span>
+    <button id="pause" type="button" title="Freeze the view (data keeps arriving)">Pause</button>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="map-pane">
+    <canvas id="map" aria-label="AI world model map"></canvas>
+    <div class="map-controls">
+      <label class="ctl">Layer
+        <select id="layer">
+          <option value="influence">Influence (ally minus enemy)</option>
+          <option value="inflEnemy">Enemy influence</option>
+          <option value="inflAlly">Ally influence</option>
+          <option value="inflAllyDefend">Ally defence influence</option>
+          <option value="threatSurf">Threat: surface</option>
+          <option value="threatAir">Threat: air</option>
+          <option value="threatAmph">Threat: amphibious</option>
+          <option value="threatCloak">Threat: decloak</option>
+          <option value="none">None</option>
+        </select>
+      </label>
+      <div id="overlays" class="chips"></div>
+    </div>
+    <div id="legend" class="legend"></div>
+    <div id="tooltip" class="tooltip" hidden></div>
+    <div class="map-hint">Scroll to zoom, drag to pan, double-click to reset</div>
+  </section>
+
+  <aside class="side">
+    <section class="card">
+      <h2>Economy</h2>
+      <div id="eco-stats" class="stats"></div>
+      <canvas id="eco-chart" class="chart"></canvas>
+      <div class="chart-key">
+        <span><i style="background: var(--ally)"></i>metal income</span>
+        <span><i style="background: var(--warn)"></i>metal pull</span>
+        <span id="eco-peak"></span>
+      </div>
+      <div id="eco-flags" class="flags"></div>
+    </section>
+
+    <section class="card">
+      <h2>Army vs enemy, by role <small>metal cost</small></h2>
+      <div id="military"></div>
+    </section>
+
+    <section class="card grow">
+      <h2>Decisions
+        <span class="feed-tools">
+          <label><input type="checkbox" id="follow" checked> follow latest</label>
+        </span>
+      </h2>
+      <div id="kind-filter" class="chips"></div>
+      <ol id="feed" class="feed"></ol>
+    </section>
+  </aside>
+</main>
+
+<section id="detail" class="detail" hidden>
+  <header>
+    <div id="detail-title"></div>
+    <button id="detail-close" type="button" aria-label="Close">Close</button>
+  </header>
+  <div class="detail-body">
+    <div>
+      <h3>Path taken</h3>
+      <ol id="detail-path" class="tree"></ol>
+      <h3>Inputs</h3>
+      <dl id="detail-inputs" class="inputs"></dl>
+      <h3>Ruled out without an option</h3>
+      <ul id="detail-rejected" class="rejected"></ul>
+    </div>
+    <div>
+      <h3 id="options-title">Options</h3>
+      <table id="detail-options" class="options"></table>
+    </div>
+  </div>
+</section>
+
+<script src="app.js"></script>
+</body>
+</html>
