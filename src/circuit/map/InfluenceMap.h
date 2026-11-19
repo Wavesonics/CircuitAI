@@ -33,8 +33,6 @@ class IMainJob;
 
 class CInfluenceMap final {
 public:
-	friend class CBrainServer;
-
 	CInfluenceMap(CMapManager* manager);
 	~CInfluenceMap();
 
@@ -48,6 +46,15 @@ public:
 	float GetInfluenceAt(const springai::AIFloat3& position) const;
 
 	int Pos2Index(const springai::AIFloat3& pos) const;
+
+	int GetWidth() const { return width; }
+	int GetHeight() const { return height; }
+	int GetSquareSize() const { return squareSize; }
+	// Read-only layers; the front buffer is only swapped on the main thread
+	const FloatVec& GetEnemyInflLayer() const { return pInflData.load()->enemyInfl; }
+	const FloatVec& GetAllyInflLayer() const { return pInflData.load()->allyInfl; }
+	const FloatVec& GetAllyDefendInflLayer() const { return pInflData.load()->allyDefendInfl; }
+	const FloatVec& GetInfluenceLayer() const { return pInflData.load()->influence; }
 
 private:
 	struct SInfluenceData {

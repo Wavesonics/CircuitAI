@@ -148,9 +148,9 @@ const std::string& CBrainServer::GetMeta()
 	.EndObj();
 	CInfluenceMap* inflMap = circuit->GetInflMap();
 	js.Key("inflGrid").BeginObj()
-		.Field("w", inflMap->width)
-		.Field("h", inflMap->height)
-		.Field("cell", inflMap->squareSize)
+		.Field("w", inflMap->GetWidth())
+		.Field("h", inflMap->GetHeight())
+		.Field("cell", inflMap->GetSquareSize())
 	.EndObj();
 
 	js.Key("roles").BeginArr();
@@ -417,26 +417,21 @@ void CBrainServer::WriteEnemies(CJsonOut& js) const
 
 void CBrainServer::WriteLayers(CJsonOut& js) const
 {
-	// Read on the main thread between buffer swaps, so the arrays are stable here
-	CThreatMap* threatMap = circuit->GetThreatMap();
-	const CThreatMap::SThreatData* thrData = threatMap->pThreatData.load();
-	const CThreatMap::SRoleThreat* thr = thrData->defThreat;
-
-	CInfluenceMap* inflMap = circuit->GetInflMap();
-	const CInfluenceMap::SInfluenceData* infl = inflMap->pInflData.load();
+	const CThreatMap* threatMap = circuit->GetThreatMap();
+	const CInfluenceMap* inflMap = circuit->GetInflMap();
 
 	auto layer = [&js](const char* name, const FloatVec& v) {
 		js.Key(name).Floats(v.data(), v.size());
 	};
 	js.Key("layers").BeginObj();
-	layer("threatAir", thr->airThreat);
-	layer("threatSurf", thr->surfThreat);
-	layer("threatAmph", thr->amphThreat);
-	layer("threatCloak", thrData->cloakThreat);
-	layer("inflEnemy", infl->enemyInfl);
-	layer("inflAlly", infl->allyInfl);
-	layer("inflAllyDefend", infl->allyDefendInfl);
-	layer("influence", infl->influence);
+	layer("threatAir", threatMap->GetDefAirThreat());
+	layer("threatSurf", threatMap->GetDefSurfThreat());
+	layer("threatAmph", threatMap->GetDefAmphThreat());
+	layer("threatCloak", threatMap->GetCloakThreat());
+	layer("inflEnemy", inflMap->GetEnemyInflLayer());
+	layer("inflAlly", inflMap->GetAllyInflLayer());
+	layer("inflAllyDefend", inflMap->GetAllyDefendInflLayer());
+	layer("influence", inflMap->GetInfluenceLayer());
 	js.EndObj();
 }
 

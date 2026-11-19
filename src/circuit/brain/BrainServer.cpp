@@ -13,6 +13,7 @@
 #include "json/json.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -36,6 +37,8 @@ constexpr int MIN_STATE_INTERVAL = 1;
 constexpr int MAX_STATE_INTERVAL = FRAMES_PER_SEC * 60;
 constexpr size_t MAX_CLIENTS = 8;
 constexpr size_t MAX_LINE = 64 * 1024;
+// Inbound bytes drained per client per frame, so a chatty client cannot stall the sim
+constexpr size_t MAX_READ_PER_UPDATE = 256 * 1024;
 // A client this far behind skips state snapshots instead of growing memory
 constexpr size_t STATE_SKIP_BACKLOG = 8 * 1024 * 1024;
 // A client this far behind is assumed stuck and is dropped
@@ -44,8 +47,36 @@ constexpr size_t MAX_BACKLOG = 64 * 1024 * 1024;
 bool IsEnabled()
 {
 	const char* env = std::getenv("BARB_BRAIN");
-	return (env != nullptr) && (env[0] != '\0') && (std::strcmp(env, "0") != 0);
+	if (env == nullptr) {
+		return false;
+	}
+	std::string v(env);
+	std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return std::tolower(c); });
+	return (v == "1") || (v == "true") || (v == "yes") || (v == "on");
 }
+
+#ifndef _WIN32
+#ifdef MSG_NOSIGNAL
+constexpr int SEND_FLAGS = MSG_NOSIGNAL;
+#else
+constexpr int SEND_FLAGS = 0;  // macOS: SIGPIPE is suppressed per socket via SO_NOSIGPIPE
+#endif
+
+// Portable stand-in for SOCK_NONBLOCK | SOCK_CLOEXEC, which macOS lacks
+bool PrepareSocket(int fd)
+{
+	const int flags = fcntl(fd, F_GETFL, 0);
+	if ((flags < 0) || (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)) {
+		return false;
+	}
+	fcntl(fd, F_SETFD, FD_CLOEXEC);
+#ifdef SO_NOSIGPIPE
+	const int one = 1;
+	setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#endif
+	return true;
+}
+#endif
 
 int BasePort()
 {
@@ -74,9 +105,12 @@ std::unique_ptr<CBrainServer> CBrainServer::Create(CCircuitAI* circuit)
 		circuit->LOG("BrainServer: port %i out of range", port);
 		return nullptr;
 	}
-	const int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-	if (fd < 0) {
+	const int fd = socket(AF_INET, SOCK_STREAM, 0);
+	if ((fd < 0) || !PrepareSocket(fd)) {
 		circuit->LOG("BrainServer: socket() failed: %s", std::strerror(errno));
+		if (fd >= 0) {
+			close(fd);
+		}
 		return nullptr;
 	}
 	const int one = 1;
@@ -124,15 +158,7 @@ void CBrainServer::Update(int frame)
 		Read(c);
 	}
 
-	if (!clients.empty() && ((lastStateFrame < 0) || (frame - lastStateFrame >= stateInterval))) {
-		lastStateFrame = frame;
-		const std::string state = MakeState(frame);
-		for (SClient& c : clients) {
-			if (c.Backlog() < STATE_SKIP_BACKLOG) {
-				Send(c, state);
-			}
-		}
-	}
+	SendStates(frame);
 
 	for (SClient& c : clients) {
 		Flush(c);
@@ -147,10 +173,27 @@ void CBrainServer::Update(int frame)
 	}
 }
 
-void CBrainServer::Broadcast(const std::string& line)
+void CBrainServer::SendStates(int frame)
 {
+	if ((lastStateFrame < 0) || (frame - lastStateFrame >= stateInterval)) {
+		lastStateFrame = frame;
+		for (SClient& c : clients) {
+			c.needsState = true;
+		}
+	}
+	// Snapshots are expensive; build one only if some client is due and can take it
+	auto isReceiver = [](const SClient& c) {
+		return c.needsState && !c.isDead && (c.Backlog() < STATE_SKIP_BACKLOG);
+	};
+	if (std::none_of(clients.begin(), clients.end(), isReceiver)) {
+		return;
+	}
+	const std::string state = MakeState(frame);
 	for (SClient& c : clients) {
-		Send(c, line);
+		if (isReceiver(c)) {
+			Send(c, state);
+			c.needsState = false;
+		}
 	}
 }
 
@@ -158,11 +201,11 @@ void CBrainServer::Accept()
 {
 #ifndef _WIN32
 	while (true) {
-		const int fd = accept4(listenFd, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
+		const int fd = accept(listenFd, nullptr, nullptr);
 		if (fd < 0) {
 			return;  // EAGAIN or a transient error; retry next frame
 		}
-		if (clients.size() >= MAX_CLIENTS) {
+		if ((clients.size() >= MAX_CLIENTS) || !PrepareSocket(fd)) {
 			close(fd);
 			continue;
 		}
@@ -172,7 +215,6 @@ void CBrainServer::Accept()
 		SClient& c = clients.back();
 		Send(c, MakeHello());
 		Send(c, GetMeta());
-		lastStateFrame = -1;  // give the newcomer a state right away
 	}
 #endif
 }
@@ -181,10 +223,12 @@ void CBrainServer::Read(SClient& client)
 {
 #ifndef _WIN32
 	char tmp[4096];
-	while (!client.isDead) {
+	size_t total = 0;
+	while (!client.isDead && (total < MAX_READ_PER_UPDATE) && (client.in.size() <= MAX_LINE)) {
 		const ssize_t n = recv(client.fd, tmp, sizeof(tmp), 0);
 		if (n > 0) {
 			client.in.append(tmp, n);
+			total += n;
 		} else if ((n == 0) || ((errno != EAGAIN) && (errno != EWOULDBLOCK) && (errno != EINTR))) {
 			client.isDead = true;
 		} else {
@@ -198,7 +242,7 @@ void CBrainServer::Read(SClient& client)
 		start = nl + 1;
 	}
 	client.in.erase(0, start);
-	if (client.in.size() > MAX_LINE) {
+	if (client.in.size() > MAX_LINE) {  // no newline within a sane line length
 		client.isDead = true;
 	}
 #endif
@@ -208,7 +252,7 @@ void CBrainServer::Flush(SClient& client)
 {
 #ifndef _WIN32
 	while (!client.isDead && (client.Backlog() > 0)) {
-		const ssize_t n = send(client.fd, client.out.data() + client.outPos, client.Backlog(), MSG_NOSIGNAL);
+		const ssize_t n = send(client.fd, client.out.data() + client.outPos, client.Backlog(), SEND_FLAGS);
 		if (n > 0) {
 			client.outPos += n;
 		} else if ((n < 0) && ((errno == EAGAIN) || (errno == EWOULDBLOCK) || (errno == EINTR))) {

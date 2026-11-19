@@ -1,7 +1,7 @@
 # BARb brain protocol
 
 BARb streams its world model to local clients when the `BARB_BRAIN` environment
-variable is set (any value except `0`). Each AI instance listens on
+variable is `1`, `true`, `yes` or `on`. Each AI instance listens on
 `127.0.0.1:(BARB_BRAIN_PORT or 7710) + skirmishAIId`.
 
 Transport is TCP with newline-delimited JSON: one object per line, each with a

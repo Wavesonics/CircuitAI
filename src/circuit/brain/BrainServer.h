@@ -2,7 +2,7 @@
  * BrainServer.h
  *
  * Streams the AI's world model and decisions to local clients over TCP as
- * newline-delimited JSON. Enabled by the BARB_BRAIN environment variable;
+ * newline-delimited JSON. Enabled by BARB_BRAIN=1 (or true/yes/on);
  * listens on 127.0.0.1:(BARB_BRAIN_PORT or 7710) + skirmishAIId.
  *
  * Everything runs on the AI's main thread: sockets are non-blocking and polled
@@ -34,12 +34,6 @@ public:
 
 	void Update(int frame);
 
-	// Cheap gate for decision tracing: only build records when someone listens
-	bool IsActive() const { return !clients.empty(); }
-
-	// Sends one JSON object (no trailing newline) to every client
-	void Broadcast(const std::string& line);
-
 	int GetPort() const { return port; }
 
 private:
@@ -51,10 +45,12 @@ private:
 		std::string out;
 		size_t outPos = 0;
 		bool isDead = false;
+		bool needsState = true;
 		size_t Backlog() const { return out.size() - outPos; }
 	};
 
 	void Accept();
+	void SendStates(int frame);
 	void Read(SClient& client);
 	void Flush(SClient& client);
 	void Send(SClient& client, const std::string& line);

@@ -26,7 +26,6 @@ class IMainJob;
 class CThreatMap final {
 public:
 	friend class CInitScript;
-	friend class CBrainServer;
 
 	CThreatMap(CMapManager* manager, float decloakRadius);
 	~CThreatMap();
@@ -53,6 +52,11 @@ public:
 	float* GetAmphThreatArray(CCircuitDef::RoleT type) { return pThreatData.load()->roleThreatPtrs[type]->amphThreat.data(); }
 	float* GetSwimThreatArray(CCircuitDef::RoleT type) { return pThreatData.load()->roleThreatPtrs[type]->swimThreat.data(); }
 	float* GetCloakThreatArray() { return cloakThreat; }
+	// Read-only default-role layers; the front buffer is only swapped on the main thread
+	const FloatVec& GetDefAirThreat() const { return pThreatData.load()->defThreat->airThreat; }
+	const FloatVec& GetDefSurfThreat() const { return pThreatData.load()->defThreat->surfThreat; }
+	const FloatVec& GetDefAmphThreat() const { return pThreatData.load()->defThreat->amphThreat; }
+	const FloatVec& GetCloakThreat() const { return pThreatData.load()->cloakThreat; }
 	int GetThreatMapWidth() const { return width; }
 	int GetThreatMapHeight() const { return height; }
 
