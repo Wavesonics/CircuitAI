@@ -218,7 +218,8 @@ class Server:
                     "sectors": f"{SECTOR_COLS} columns A-{chr(ord('A') + SECTOR_COLS - 1)} of "
                                f"{round(g.sector_size())} elmos; rows numbered from the north"},
             "base": g.pos(st["basePos"]),
-            "enemyCentre": g.pos(st["enemyPos"]),
+            # Before any sighting enemyPos is only the AI's starting guess
+            "enemyCentre": g.pos(st["enemyPos"]) if any(e[0] >= 0 for e in st["enemies"]) else None,
             "economy": {
                 "metal": {"income": round(eco["mInc"], 1), "pull": round(eco["mPull"], 1),
                           "stored": round(eco["mCur"]), "storage": round(eco["mStore"])},
@@ -339,7 +340,7 @@ class Server:
                 continue
             t = tasks.get(tid)
             out.append({"id": uid, "unit": d.get("name", "?"), "role": d.get("role", "?"),
-                        "at": g.pos([x, z]), "health": round(hp, 2) if isinstance(hp, (int, float)) else None,
+                        "structure": not d.get("mobile", True), "at": g.pos([x, z]), "health": round(hp, 2) if isinstance(hp, (int, float)) else None,
                         "doing": self._task_label(g, t), "yourControl": uid in held})
         out.sort(key=lambda u: (u["role"], u["unit"]))
         return {"count": len(out), "units": out[:limit], "truncated": len(out) > limit}
@@ -432,7 +433,10 @@ class Server:
         obj = {"t": "cmd", "op": op, "id": f"mcp-{self.cmd_seq}", **fields}
         ack = g.link.request(obj, timeout=5.0)
         if ack is None:
-            raise ToolError("the AI did not answer; it may have disconnected or the game is paused")
+            # The AI reads commands each sim frame, so a paused or lagging game
+            # answers late but still applies the command
+            raise ToolError("no answer from the AI within 5 s. If the game is paused or lagging the command "
+                            "may still apply when it resumes: check get_overview before retrying")
         if not ack.get("ok"):
             raise ToolError(f"the AI refused: {ack.get('error', 'no reason given')}")
         return ack
@@ -459,7 +463,7 @@ class Server:
 
     def t_reset(self, args):
         g = self.game(args)
-        fields = {"key": args["key"]} if args.get("key") else {}
+        fields = {"key": args["key"]} if args.get("key") is not None else {}
         return self.control_summary(g, self.command(g, "reset", **fields))
 
     def t_limit_unit(self, args):
@@ -482,9 +486,12 @@ class Server:
         return self.control_summary(g, self.command(g, "recruit", **fields))
 
     def select_units(self, g, args):
-        """Unit ids from explicit ids, or from role/type/area filters over the latest state."""
+        """(ids, matched) from explicit ids, or from role/type/area filters over the latest state.
+        Area-only selections leave out the commander and constructors, which a stray fight order
+        would throw away; name their role or type to order them."""
         if args.get("units"):
-            return [int(u) for u in args["units"]]
+            ids = [int(u) for u in args["units"]]
+            return ids[:self.MAX_ORDER_UNITS], len(ids)
         role, name = args.get("role"), args.get("unit")
         area = args.get("from_sector")
         if not (role or name or area):
@@ -503,17 +510,19 @@ class Server:
                 continue
             if name and d.get("name") != name:
                 continue
+            if not (role or name) and d.get("role") in ("commander", "builder", "builderT2"):
+                continue
             if area and (abs(x - cx) > half or abs(z - cz) > half):
                 continue
             ids.append(uid)
         if not ids:
             raise ToolError("no mobile units match that selection")
-        return ids[:self.MAX_ORDER_UNITS]
+        return ids[:self.MAX_ORDER_UNITS], len(ids)
 
     def t_order_units(self, args):
         g = self.game(args)
         action = args["action"]
-        ids = self.select_units(g, args)
+        ids, matched = self.select_units(g, args)
         fields = {"action": action, "units": ids}
         if action in ("move", "fight"):
             tx, tz = g.point({"x": args.get("x"), "z": args.get("z"), "sector": args.get("to_sector")}, "the destination")
@@ -522,6 +531,8 @@ class Server:
             fields["seconds"] = int(args["seconds"])
         out = self.control_summary(g, self.command(g, "units", **fields))
         out["selected"] = len(ids)
+        if matched > len(ids):
+            out["leftOut"] = f"{matched - len(ids)} more units matched; at most {self.MAX_ORDER_UNITS} per order"
         return out
 
     def t_set_focus(self, args):
@@ -683,7 +694,8 @@ tool("order_units",
      {"action": {"type": "string", "enum": ["fight", "move", "stop", "retreat", "release"]},
       "units": {"type": "array", "items": {"type": "integer"}},
       "role": {"type": "string"}, "unit": {"type": "string"},
-      "from_sector": {"type": "string", "description": "only units inside this sector"},
+      "from_sector": {"type": "string", "description": "only units inside this sector; without role or unit "
+                                                       "this skips the commander and constructors"},
       "x": {"type": "number"}, "z": {"type": "number"},
       "to_sector": {"type": "string", "description": "destination sector, instead of x and z"},
       "seconds": {"type": "integer"}}, ("action",))(Server.t_order_units)
