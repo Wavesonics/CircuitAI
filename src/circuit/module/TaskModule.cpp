@@ -143,7 +143,9 @@ void ITaskModule::Update()
 				AbortTask(task);
 			} else {
 				task->CheckMembers();
-				task->Update();
+				if (!task->IsDead()) {  // CheckMembers may abort the task
+					task->Update();
+				}
 			}
 			++updateIterator;
 			n--;

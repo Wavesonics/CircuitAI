@@ -52,7 +52,8 @@ public:
 
 	virtual void Start(CCircuitUnit* unit) = 0;  // <=> IAction::OnStart()
 	virtual void Update() = 0;
-	// Checks that assignees really belong to this task; logs violations
+	// Repairs assignees that do not really belong to this task, logging each;
+	// may abort the task
 	virtual void CheckMembers() {}
 	virtual void Stop(bool done);  // <=> IAction::OnEnd()
 protected:

@@ -334,16 +334,56 @@ bool ISquadTask::IsMustRegroup()
 
 void ISquadTask::CheckMembers()
 {
+	std::vector<CCircuitUnit*> broken;
 	for (CCircuitUnit* unit : units) {
 		if ((unit->GetTravelAct() == nullptr) || (unit->GetTask() != this)) {
-			ReportBrokenMember(unit, "CheckMembers");
+			broken.push_back(unit);
+		}
+	}
+	for (CCircuitUnit* unit : broken) {
+		ReportBrokenMember(unit, "CheckMembers");
+		if (unit->GetTask() == this) {
+			RemoveAssignee(unit);  // to idle; the AI reassigns it with fresh actions
+		} else {
+			ForgetMember(unit);
+		}
+		if (IsDead()) {  // removals may abort a squad that became too weak
+			return;
 		}
 	}
 }
 
+void ISquadTask::ForgetMember(CCircuitUnit* unit)
+{
+	// Mirrors RemoveAssignee's bookkeeping, minus unit->Clear() and the move to
+	// idle, which would break the task that actually owns the unit
+	pathQueries.erase(unit);
+	units.erase(unit);
+	attackPower -= unit->GetCircuitDef()->GetPower();
+	cowards.erase(unit);
+	shields.erase(unit);
+	const float range = unit->GetCircuitDef()->GetMinRange();
+	auto it = rangeUnits.find(range);
+	if (it != rangeUnits.end()) {
+		it->second.erase(unit);
+		if (it->second.empty()) {
+			rangeUnits.erase(it);
+		}
+	}
+
+	leader = nullptr;
+	lowestRange = lowestSpeed = std::numeric_limits<float>::max();
+	highestRange = highestSpeed = .0f;
+	if (units.empty()) {
+		manager->AbortTask(this);
+		return;
+	}
+	FindLeader(units.begin(), units.end());
+}
+
 void ISquadTask::ReportBrokenMember(CCircuitUnit* unit, const char* where)
 {
-	if (!reportedMembers.insert(unit).second) {
+	if (!reportedMembers.insert(unit->GetId()).second) {
 		return;
 	}
 	CCircuitAI* circuit = manager->GetCircuit();

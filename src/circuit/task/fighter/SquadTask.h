@@ -9,6 +9,7 @@
 #define SRC_CIRCUIT_TASK_FIGHTER_SQUADTASK_H_
 
 #include "task/fighter/FighterTask.h"
+#include "unit/CoreUnit.h"
 #include "terrain/path/MicroPather.h"
 
 #include <memory>
@@ -47,6 +48,8 @@ protected:
 	// another task. Squad code dereferences GetTravelAct() for every assignee,
 	// so such a unit would crash the engine.
 	void ReportBrokenMember(CCircuitUnit* unit, const char* where);
+	// Drops a unit that another task owns without touching the unit itself
+	void ForgetMember(CCircuitUnit* unit);
 	void Attack(const int frame);
 	void Attack(const int frame, const bool isGround);
 
@@ -63,7 +66,7 @@ protected:
 	std::map<float, std::set<CCircuitUnit*>> rangeUnits;
 
 private:
-	std::set<const CCircuitUnit*> reportedMembers;
+	std::set<ICoreUnit::Id> reportedMembers;
 
 protected:
 	int groupFrame;
